@@ -1,0 +1,135 @@
+#include "recorder.h"
+#include "arctic_registers.h"
+
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include <mutex>
+
+#include "esp_log.h"
+#include "esp_timer.h"
+
+static const char *TAG = "recorder";
+
+namespace recorder {
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
+static std::mutex  s_mutex;
+static bool        s_recording = false;
+static int64_t     s_start_us  = 0;
+static std::string s_buffer;          // JSONL accumulator
+static size_t      s_entry_count = 0;
+
+// Reserve 128 KB initial buffer to reduce reallocations
+constexpr size_t INITIAL_RESERVE = 128 * 1024;
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+void start()
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+    s_buffer.clear();
+    s_buffer.reserve(INITIAL_RESERVE);
+    s_entry_count = 0;
+    s_start_us = esp_timer_get_time();
+    s_recording = true;
+    ESP_LOGI(TAG, "Recording started");
+}
+
+void stop()
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+    s_recording = false;
+    ESP_LOGI(TAG, "Recording stopped — %u entries, %u bytes",
+             (unsigned)s_entry_count, (unsigned)s_buffer.size());
+}
+
+bool is_recording()
+{
+    return s_recording;
+}
+
+void add(const sniffer::Transaction &txn)
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+    if (!s_recording) return;
+
+    uint32_t t = (uint32_t)((esp_timer_get_time() - s_start_us) / 1000);
+
+    char line[1024];
+    int off = 0;
+
+    switch (txn.fc) {
+        case 0x03: {
+            // Read Holding — emit as fc=3 with values from response
+            off = snprintf(line, sizeof(line),
+                           "{\"t\":%lu,\"fc\":3,\"addr\":%u,\"count\":%u,\"values\":[",
+                           (unsigned long)t, txn.reg_addr, txn.reg_count);
+            for (uint16_t i = 0; i < txn.reg_count && off < (int)sizeof(line) - 16; ++i) {
+                if (i > 0) line[off++] = ',';
+                off += snprintf(line + off, sizeof(line) - off, "%u", txn.values[i]);
+            }
+            off += snprintf(line + off, sizeof(line) - off, "]}\n");
+            break;
+        }
+        case 0x06: {
+            // Write Single
+            off = snprintf(line, sizeof(line),
+                           "{\"t\":%lu,\"fc\":6,\"addr\":%u,\"value\":%u}\n",
+                           (unsigned long)t, txn.reg_addr, txn.values[0]);
+            break;
+        }
+        case 0x10: {
+            // Write Multiple
+            off = snprintf(line, sizeof(line),
+                           "{\"t\":%lu,\"fc\":16,\"addr\":%u,\"count\":%u,\"values\":[",
+                           (unsigned long)t, txn.reg_addr, txn.reg_count);
+            for (uint16_t i = 0; i < txn.reg_count && off < (int)sizeof(line) - 16; ++i) {
+                if (i > 0) line[off++] = ',';
+                off += snprintf(line + off, sizeof(line) - off, "%u", txn.values[i]);
+            }
+            off += snprintf(line + off, sizeof(line) - off, "]}\n");
+            break;
+        }
+        default:
+            return;  // Skip unknown function codes
+    }
+
+    s_buffer.append(line, off);
+    s_entry_count++;
+}
+
+const char *get_data(size_t &len)
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+    len = s_buffer.size();
+    return s_buffer.c_str();
+}
+
+size_t get_entry_count()
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+    return s_entry_count;
+}
+
+void clear()
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+    s_buffer.clear();
+    s_buffer.shrink_to_fit();
+    s_entry_count = 0;
+    ESP_LOGI(TAG, "Recording data cleared");
+}
+
+uint32_t elapsed_ms()
+{
+    if (!s_recording) return 0;
+    return (uint32_t)((esp_timer_get_time() - s_start_us) / 1000);
+}
+
+}  // namespace recorder

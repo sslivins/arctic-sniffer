@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arctic Sniffer</title>
+<style>
+:root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg); color: var(--text);
+    font-size: 14px; line-height: 1.5;
+}
+header {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 12px 20px; display: flex; align-items: center;
+    justify-content: space-between; flex-wrap: wrap; gap: 10px;
+}
+header h1 { font-size: 18px; font-weight: 600; }
+header h1 span { color: var(--accent); }
+.status-bar {
+    display: flex; gap: 16px; align-items: center; font-size: 13px;
+}
+.status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    display: inline-block; margin-right: 4px;
+}
+.dot-green { background: var(--green); }
+.dot-red { background: var(--red); }
+.dot-yellow { background: var(--yellow); }
+.controls {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 8px 20px; display: flex; gap: 10px; align-items: center;
+}
+button {
+    background: var(--border); color: var(--text); border: 1px solid var(--border);
+    padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;
+    transition: background 0.15s;
+}
+button:hover { background: #484f58; }
+button.primary { background: var(--accent); color: #000; border-color: var(--accent); }
+button.primary:hover { background: #79c0ff; }
+button.danger { background: var(--red); color: #fff; border-color: var(--red); }
+button.danger:hover { background: #ff7b72; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+.rec-indicator {
+    display: none; align-items: center; gap: 6px; color: var(--red);
+    font-weight: 600; font-size: 13px;
+}
+.rec-indicator.active { display: flex; }
+.rec-dot {
+    width: 10px; height: 10px; border-radius: 50%; background: var(--red);
+    animation: blink 1s infinite;
+}
+@keyframes blink { 50% { opacity: 0.3; } }
+.stats {
+    margin-left: auto; font-size: 12px; color: var(--muted);
+    display: flex; gap: 14px;
+}
+#log {
+    padding: 8px 16px; overflow-y: auto;
+    height: calc(100vh - 110px);
+}
+.txn {
+    font-family: 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 12.5px; padding: 6px 10px; margin: 2px 0;
+    border-radius: 4px; background: var(--surface);
+    border-left: 3px solid var(--border);
+    cursor: pointer; transition: background 0.1s;
+}
+.txn:hover { background: #1c2129; }
+.txn.fc3  { border-left-color: var(--accent); }
+.txn.fc6  { border-left-color: var(--green); }
+.txn.fc16 { border-left-color: var(--yellow); }
+.txn.err  { border-left-color: var(--red); }
+.txn-header {
+    display: flex; gap: 12px; color: var(--muted);
+}
+.txn-header .fc { font-weight: 600; }
+.txn.fc3  .fc { color: var(--accent); }
+.txn.fc6  .fc { color: var(--green); }
+.txn.fc16 .fc { color: var(--yellow); }
+.txn.err  .fc { color: var(--red); }
+.txn-regs {
+    display: none; margin-top: 6px; padding: 6px 0 2px 0;
+    border-top: 1px solid var(--border);
+}
+.txn.expanded .txn-regs { display: block; }
+.reg-row {
+    display: flex; gap: 8px; padding: 1px 0; font-size: 12px;
+}
+.reg-addr { color: var(--muted); min-width: 44px; }
+.reg-name { color: var(--accent); min-width: 180px; }
+.reg-val  { color: var(--text); }
+</style>
+</head>
+<body>
+
+<header>
+    <h1>❄ Arctic <span>Sniffer</span></h1>
+    <div class="status-bar">
+        <span><span class="status-dot dot-red" id="wsDot"></span>
+              <span id="wsStatus">Disconnected</span></span>
+    </div>
+</header>
+
+<div class="controls">
+    <button id="btnRecord" class="primary" onclick="toggleRecord()">⏺ Record</button>
+    <button id="btnDownload" onclick="download()" disabled>⬇ Download</button>
+    <button id="btnClear" class="danger" onclick="clearRec()" disabled>🗑 Clear</button>
+    <div class="rec-indicator" id="recIndicator">
+        <div class="rec-dot"></div> REC
+        <span id="recEntries">0 entries</span>
+    </div>
+    <div class="stats">
+        <span>Frames: <b id="statFrames">0</b></span>
+        <span>CRC Err: <b id="statCrc">0</b></span>
+        <span>Txns: <b id="statTxn">0</b></span>
+    </div>
+    <button onclick="clearLog()" title="Clear display">🧹</button>
+    <label style="font-size:12px;color:var(--muted);margin-left:4px">
+        <input type="checkbox" id="autoScroll" checked> Auto-scroll
+    </label>
+</div>
+
+<div id="log"></div>
+
+<script>
+const log = document.getElementById('log');
+const MAX_LOG = 500;
+let ws = null;
+let recording = false;
+
+function connect() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${proto}//${location.host}/ws`);
+    ws.onopen = () => {
+        document.getElementById('wsDot').className = 'status-dot dot-green';
+        document.getElementById('wsStatus').textContent = 'Connected';
+    };
+    ws.onclose = () => {
+        document.getElementById('wsDot').className = 'status-dot dot-red';
+        document.getElementById('wsStatus').textContent = 'Disconnected';
+        setTimeout(connect, 2000);
+    };
+    ws.onmessage = (e) => {
+        try { addTransaction(JSON.parse(e.data)); } catch {}
+    };
+}
+
+function addTransaction(txn) {
+    const el = document.createElement('div');
+    let cls = 'txn';
+    if (txn.error) cls += ' err';
+    else if (txn.fc === 3)  cls += ' fc3';
+    else if (txn.fc === 6)  cls += ' fc6';
+    else if (txn.fc === 16) cls += ' fc16';
+    el.className = cls;
+    el.onclick = () => el.classList.toggle('expanded');
+
+    const ts = new Date(txn.ts).toLocaleTimeString('en', {hour12:false});
+    const addr = txn.addr;
+    const end = txn.count > 1 ? `–${addr + txn.count - 1}` : '';
+
+    let hdr = `<div class="txn-header">
+        <span class="fc">${txn.fc_name}</span>
+        <span>Reg ${addr}${end}</span>
+        <span>${txn.count} reg${txn.count>1?'s':''}</span>`;
+    if (txn.error) hdr += `<span style="color:var(--red)">ERR:${txn.error}</span>`;
+    // Show first value summary for single-register writes
+    if (txn.fc === 6 && txn.regs && txn.regs.length === 1) {
+        hdr += `<span>= ${txn.regs[0].value}</span>`;
+    }
+    hdr += '</div>';
+
+    let regs = '<div class="txn-regs">';
+    if (txn.regs) {
+        for (const r of txn.regs) {
+            regs += `<div class="reg-row">
+                <span class="reg-addr">${r.addr}</span>
+                <span class="reg-name">${r.name}</span>
+                <span class="reg-val">${r.value} <span style="color:var(--muted)">(${r.raw})</span></span>
+            </div>`;
+        }
+    }
+    regs += '</div>';
+
+    el.innerHTML = hdr + regs;
+    log.appendChild(el);
+
+    // Trim old entries
+    while (log.children.length > MAX_LOG) log.removeChild(log.firstChild);
+
+    if (document.getElementById('autoScroll').checked) {
+        log.scrollTop = log.scrollHeight;
+    }
+}
+
+function clearLog() { log.innerHTML = ''; }
+
+async function toggleRecord() {
+    const btn = document.getElementById('btnRecord');
+    if (!recording) {
+        await fetch('/api/record/start', {method:'POST'});
+        recording = true;
+        btn.textContent = '⏹ Stop';
+        btn.className = 'danger';
+        document.getElementById('recIndicator').classList.add('active');
+        document.getElementById('btnDownload').disabled = true;
+        document.getElementById('btnClear').disabled = true;
+    } else {
+        await fetch('/api/record/stop', {method:'POST'});
+        recording = false;
+        btn.textContent = '⏺ Record';
+        btn.className = 'primary';
+        document.getElementById('recIndicator').classList.remove('active');
+        document.getElementById('btnDownload').disabled = false;
+        document.getElementById('btnClear').disabled = false;
+    }
+}
+
+function download() {
+    window.open('/api/record/download', '_blank');
+}
+
+async function clearRec() {
+    await fetch('/api/record', {method:'DELETE'});
+    document.getElementById('btnDownload').disabled = true;
+    document.getElementById('btnClear').disabled = true;
+    document.getElementById('recEntries').textContent = '0 entries';
+}
+
+async function pollStatus() {
+    try {
+        const r = await fetch('/api/status');
+        const s = await r.json();
+        document.getElementById('statFrames').textContent = s.frames;
+        document.getElementById('statCrc').textContent = s.crc_errors;
+        document.getElementById('statTxn').textContent = s.transactions;
+        if (s.recording) {
+            document.getElementById('recEntries').textContent = s.rec_entries + ' entries';
+        }
+    } catch {}
+}
+
+// Poll status every 2s
+setInterval(pollStatus, 2000);
+connect();
+pollStatus();
+</script>
+</body>
+</html>

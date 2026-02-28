@@ -1,0 +1,50 @@
+menu "Arctic Sniffer Configuration"
+
+    menu "WiFi"
+        config WIFI_SSID
+            string "WiFi SSID"
+            default "your_ssid"
+            help
+                SSID of the WiFi network to connect to.
+
+        config WIFI_PASSWORD
+            string "WiFi Password"
+            default "your_password"
+            help
+                Password for the WiFi network.
+
+        config MDNS_HOSTNAME
+            string "mDNS Hostname"
+            default "arctic-sniffer"
+            help
+                mDNS hostname (accessible as <hostname>.local).
+    endmenu
+
+    menu "RS-485 / UART"
+        config SNIFFER_UART_PORT
+            int "UART Port Number"
+            default 1
+            range 0 2
+            help
+                UART peripheral to use for RS-485 reception.
+
+        config SNIFFER_UART_TX_PIN
+            int "TX GPIO Pin"
+            default 6
+            help
+                TX pin (active but unused — sniffer is receive-only).
+
+        config SNIFFER_UART_RX_PIN
+            int "RX GPIO Pin"
+            default 5
+            help
+                RX pin connected to the RS-485 bus.
+
+        config SNIFFER_UART_BAUD
+            int "Baud Rate"
+            default 2400
+            help
+                Baud rate for the Modbus RTU bus.
+    endmenu
+
+endmenu
