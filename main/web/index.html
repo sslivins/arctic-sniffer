@@ -218,6 +218,8 @@ function addTransaction(txn) {
     // Buffer entries while an item is expanded to keep the view stable
     if (log.querySelector('.txn.expanded')) {
         pendingEntries.push(el);
+        // Cap the buffer so memory doesn't grow unbounded
+        while (pendingEntries.length > MAX_LOG) pendingEntries.shift();
         return;
     }
 
