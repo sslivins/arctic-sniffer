@@ -73,10 +73,23 @@ static int txn_to_json(const sniffer::Transaction &txn, char *buf, size_t buf_le
 {
     const char *fc_name = arctic::function_code_name(txn.fc);
 
+    // Format epoch ms manually — %lld is unreliable on Xtensa toolchain
+    char ts_buf[24];
+    {
+        int64_t v = txn.timestamp_ms;
+        bool neg = v < 0;
+        if (neg) v = -v;
+        char *p = ts_buf + sizeof(ts_buf) - 1;
+        *p = '\0';
+        do { *--p = '0' + (v % 10); v /= 10; } while (v);
+        if (neg) *--p = '-';
+        memmove(ts_buf, p, ts_buf + sizeof(ts_buf) - p);
+    }
+
     int off = snprintf(buf, buf_len,
-        "{\"ts\":%ld,\"slave\":%u,\"fc\":%u,\"fc_name\":\"%s\","
+        "{\"ts\":%s,\"slave\":%u,\"fc\":%u,\"fc_name\":\"%s\","
         "\"addr\":%u,\"count\":%u,\"error\":%u,\"regs\":[",
-        (long)txn.timestamp_ms, txn.slave_addr, txn.fc, fc_name,
+        ts_buf, txn.slave_addr, txn.fc, fc_name,
         txn.reg_addr, txn.reg_count, txn.error_code);
 
     for (uint16_t i = 0; i < txn.reg_count && off < (int)buf_len - 128; ++i) {
@@ -139,7 +152,7 @@ static esp_err_t handle_status(httpd_req_t *req)
     int len = snprintf(buf, sizeof(buf),
         "{\"version\":\"%s\",\"ip\":\"%s\",\"frames\":%lu,\"crc_errors\":%lu,"
         "\"transactions\":%lu,\"recording\":%s,"
-        "\"rec_entries\":%lu,\"rec_elapsed_ms\":%lu,"
+        "\"rec_entries\":%lu,"
         "\"ws_clients\":%u}",
         app->version,
         wifi::get_ip(),
@@ -148,7 +161,6 @@ static esp_err_t handle_status(httpd_req_t *req)
         (unsigned long)sniffer::get_transaction_count(),
         recorder::is_recording() ? "true" : "false",
         (unsigned long)recorder::get_entry_count(),
-        (unsigned long)recorder::elapsed_ms(),
         ws_count);
 
     httpd_resp_set_type(req, "application/json");

@@ -2,11 +2,13 @@
 
 #include <cstring>
 #include <atomic>
+#include <ctime>
 
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_netif.h"
+#include "esp_sntp.h"
 #include "mdns.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -81,6 +83,36 @@ static void start_mdns()
 }
 
 // ---------------------------------------------------------------------------
+// NTP time sync
+// ---------------------------------------------------------------------------
+
+static void start_ntp()
+{
+    ESP_LOGI(TAG, "Starting SNTP sync…");
+    esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0, "pool.ntp.org");
+    esp_sntp_init();
+
+    // Wait up to 10 s for time to be set
+    int retry = 0;
+    constexpr int MAX_NTP_RETRIES = 20;
+    time_t now = 0;
+    struct tm timeinfo = {};
+    while (timeinfo.tm_year < (2020 - 1900) && ++retry <= MAX_NTP_RETRIES) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        time(&now);
+        localtime_r(&now, &timeinfo);
+    }
+    if (timeinfo.tm_year >= (2020 - 1900)) {
+        char buf[32];
+        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
+        ESP_LOGI(TAG, "NTP synced: %s UTC", buf);
+    } else {
+        ESP_LOGW(TAG, "NTP sync timed out — timestamps will be uptime-based");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -117,6 +149,7 @@ esp_err_t init()
 
     if (bits & CONNECTED_BIT) {
         start_mdns();
+        start_ntp();
         return ESP_OK;
     }
 

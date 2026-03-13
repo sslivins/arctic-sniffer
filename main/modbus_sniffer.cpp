@@ -3,6 +3,7 @@
 
 #include <cstring>
 #include <atomic>
+#include <sys/time.h>
 
 #include "driver/uart.h"
 #include "esp_log.h"
@@ -62,6 +63,7 @@ static size_t   s_blob_len = 0;
 // Pending request (waiting for matching response)
 static bool     s_have_pending = false;
 static Transaction s_pending;
+static int64_t  s_pending_uptime_ms = 0;  // uptime when request arrived (for timeout)
 
 // ---------------------------------------------------------------------------
 // Frame parser
@@ -153,7 +155,15 @@ static void process_frame(const uint8_t *buf, size_t len)
     const uint8_t *payload = buf + 2;
     size_t plen = len - 4;  // minus addr + fc + 2 CRC bytes
 
-    int64_t now_ms = esp_timer_get_time() / 1000;
+    // Use wall-clock time if NTP has synced, otherwise fall back to uptime
+    struct timeval tv;
+    gettimeofday(&tv, nullptr);
+    int64_t now_ms;
+    if (tv.tv_sec > 1577836800) {  // after 2020-01-01 → NTP synced
+        now_ms = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+    } else {
+        now_ms = esp_timer_get_time() / 1000;
+    }
 
     // Is this a request (from master) or response (from slave)?
     // Convention: on a bus with one master, the master sends requests.
@@ -164,6 +174,7 @@ static void process_frame(const uint8_t *buf, size_t len)
         // Treat as a request
         memset(&s_pending, 0, sizeof(s_pending));
         s_pending.timestamp_ms = now_ms;
+        s_pending_uptime_ms = esp_timer_get_time() / 1000;
         s_pending.slave_addr = addr;
         s_pending.fc = fc;
         s_pending.has_response = false;
@@ -413,8 +424,8 @@ static void sniffer_task(void *arg)
 
         // Response timeout for pending request
         if (s_have_pending) {
-            int64_t now_ms = esp_timer_get_time() / 1000;
-            if ((now_ms - s_pending.timestamp_ms) > RESP_TIMEOUT_MS) {
+            int64_t uptime_ms = esp_timer_get_time() / 1000;
+            if ((uptime_ms - s_pending_uptime_ms) > RESP_TIMEOUT_MS) {
                 ESP_LOGW(TAG, "Response timeout for FC 0x%02X addr %u",
                          s_pending.fc, s_pending.reg_addr);
                 s_pending.has_response = false;

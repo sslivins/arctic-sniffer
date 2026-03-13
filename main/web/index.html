@@ -108,6 +108,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
     <div class="status-bar">
         <span><span class="status-dot dot-red" id="wsDot"></span>
               <span id="wsStatus">Disconnected</span></span>
+        <span id="clock" style="color:var(--muted);font-size:13px;margin-left:auto"></span>
     </div>
 </header>
 
@@ -132,18 +133,23 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
         <span>Txns: <b id="statTxn">0</b></span>
     </div>
     <button onclick="clearLog()" title="Clear display">🧹</button>
-    <label style="font-size:12px;color:var(--muted);margin-left:4px">
-        <input type="checkbox" id="autoScroll" checked> Auto-scroll
-    </label>
 </div>
 
 <div id="log"></div>
 
 <script>
 const log = document.getElementById('log');
-const MAX_LOG = 500;
+const MAX_LOG = 1000;
+
+// Live clock in header
+setInterval(() => {
+    document.getElementById('clock').textContent =
+        new Date().toLocaleTimeString('en', {hour12:false});
+}, 1000);
+
 let ws = null;
 let recording = false;
+let pendingEntries = [];  // buffered while an item is expanded
 
 // --- PC streaming save state ---
 let streaming = false;
@@ -182,13 +188,18 @@ function addTransaction(txn) {
     else if (txn.fc === 6)  cls += ' fc6';
     else if (txn.fc === 16) cls += ' fc16';
     el.className = cls;
-    el.onclick = () => el.classList.toggle('expanded');
+    el.onclick = () => {
+        el.classList.toggle('expanded');
+        // Flush buffered entries when all items are collapsed
+        if (!log.querySelector('.txn.expanded')) flushPending();
+    };
 
     const ts = new Date(txn.ts).toLocaleTimeString('en', {hour12:false});
     const addr = txn.addr;
     const end = txn.count > 1 ? `–${addr + txn.count - 1}` : '';
 
     let hdr = `<div class="txn-header">
+        <span style="color:var(--muted)">${ts}</span>
         <span class="fc">${txn.fc_name}</span>
         <span>Reg ${addr}${end}</span>
         <span>${txn.count} reg${txn.count>1?'s':''}</span>`;
@@ -212,13 +223,34 @@ function addTransaction(txn) {
     regs += '</div>';
 
     el.innerHTML = hdr + regs;
-    log.appendChild(el);
+
+    // Buffer entries while an item is expanded to keep the view stable
+    if (log.querySelector('.txn.expanded')) {
+        pendingEntries.push(el);
+        // Cap the buffer so memory doesn't grow unbounded
+        while (pendingEntries.length > MAX_LOG) pendingEntries.shift();
+        return;
+    }
+
+    insertEntry(el);
+}
+
+function flushPending() {
+    while (pendingEntries.length > 0) {
+        insertEntry(pendingEntries.shift());
+    }
+}
+
+function insertEntry(el) {
+    const nearTop = log.scrollTop < 50;
+
+    log.prepend(el);
 
     // Trim old entries
-    while (log.children.length > MAX_LOG) log.removeChild(log.firstChild);
+    while (log.children.length > MAX_LOG) log.removeChild(log.lastChild);
 
-    if (document.getElementById('autoScroll').checked) {
-        log.scrollTop = log.scrollHeight;
+    if (nearTop) {
+        log.scrollTop = 0;
     }
 }
 
