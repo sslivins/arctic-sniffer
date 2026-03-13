@@ -191,6 +191,7 @@ function addTransaction(txn) {
     const end = txn.count > 1 ? `–${addr + txn.count - 1}` : '';
 
     let hdr = `<div class="txn-header">
+        <span style="color:var(--muted)">${ts}</span>
         <span class="fc">${txn.fc_name}</span>
         <span>Reg ${addr}${end}</span>
         <span>${txn.count} reg${txn.count>1?'s':''}</span>`;
