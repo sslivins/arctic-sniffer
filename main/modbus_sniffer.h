@@ -14,7 +14,7 @@ namespace sniffer {
 constexpr size_t MAX_REGS = 64;
 
 struct Transaction {
-    int64_t  timestamp_ms;              // esp_timer_get_time() / 1000
+    int64_t  timestamp_ms;              // epoch ms (NTP) or uptime ms (fallback)
     uint8_t  slave_addr;
     uint8_t  fc;                        // function code
     uint16_t reg_addr;                  // starting register address

@@ -186,7 +186,7 @@ function addTransaction(txn) {
         if (!log.querySelector('.txn.expanded')) flushPending();
     };
 
-    const ts = new Date().toLocaleTimeString('en', {hour12:false});
+    const ts = new Date(txn.ts).toLocaleTimeString('en', {hour12:false});
     const addr = txn.addr;
     const end = txn.count > 1 ? `–${addr + txn.count - 1}` : '';
 
