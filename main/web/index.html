@@ -141,6 +141,7 @@ const log = document.getElementById('log');
 const MAX_LOG = 500;
 let ws = null;
 let recording = false;
+let pendingEntries = [];  // buffered while an item is expanded
 
 // --- PC streaming save state ---
 let streaming = false;
@@ -179,7 +180,11 @@ function addTransaction(txn) {
     else if (txn.fc === 6)  cls += ' fc6';
     else if (txn.fc === 16) cls += ' fc16';
     el.className = cls;
-    el.onclick = () => el.classList.toggle('expanded');
+    el.onclick = () => {
+        el.classList.toggle('expanded');
+        // Flush buffered entries when all items are collapsed
+        if (!log.querySelector('.txn.expanded')) flushPending();
+    };
 
     const ts = new Date(txn.ts).toLocaleTimeString('en', {hour12:false});
     const addr = txn.addr;
@@ -210,22 +215,31 @@ function addTransaction(txn) {
 
     el.innerHTML = hdr + regs;
 
-    // If user is near the top and not inspecting an expanded item, stay pinned;
-    // otherwise preserve scroll position so the view doesn't jump.
+    // Buffer entries while an item is expanded to keep the view stable
+    if (log.querySelector('.txn.expanded')) {
+        pendingEntries.push(el);
+        return;
+    }
+
+    insertEntry(el);
+}
+
+function flushPending() {
+    while (pendingEntries.length > 0) {
+        insertEntry(pendingEntries.shift());
+    }
+}
+
+function insertEntry(el) {
     const nearTop = log.scrollTop < 50;
-    const hasExpanded = log.querySelector('.txn.expanded') !== null;
-    const prevHeight = log.scrollHeight;
 
     log.prepend(el);
 
     // Trim old entries
     while (log.children.length > MAX_LOG) log.removeChild(log.lastChild);
 
-    if (nearTop && !hasExpanded) {
+    if (nearTop) {
         log.scrollTop = 0;
-    } else {
-        // Offset scroll so the same content stays in view
-        log.scrollTop += log.scrollHeight - prevHeight;
     }
 }
 
