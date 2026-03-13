@@ -212,13 +212,13 @@ function addTransaction(txn) {
     regs += '</div>';
 
     el.innerHTML = hdr + regs;
-    log.appendChild(el);
+    log.prepend(el);
 
     // Trim old entries
-    while (log.children.length > MAX_LOG) log.removeChild(log.firstChild);
+    while (log.children.length > MAX_LOG) log.removeChild(log.lastChild);
 
     if (document.getElementById('autoScroll').checked) {
-        log.scrollTop = log.scrollHeight;
+        log.scrollTop = 0;
     }
 }
 
