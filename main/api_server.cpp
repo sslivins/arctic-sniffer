@@ -152,7 +152,7 @@ static esp_err_t handle_status(httpd_req_t *req)
     int len = snprintf(buf, sizeof(buf),
         "{\"version\":\"%s\",\"ip\":\"%s\",\"frames\":%lu,\"crc_errors\":%lu,"
         "\"transactions\":%lu,\"recording\":%s,"
-        "\"rec_entries\":%lu,\"rec_elapsed_ms\":%lu,"
+        "\"rec_entries\":%lu,"
         "\"ws_clients\":%u}",
         app->version,
         wifi::get_ip(),
@@ -161,7 +161,6 @@ static esp_err_t handle_status(httpd_req_t *req)
         (unsigned long)sniffer::get_transaction_count(),
         recorder::is_recording() ? "true" : "false",
         (unsigned long)recorder::get_entry_count(),
-        (unsigned long)recorder::elapsed_ms(),
         ws_count);
 
     httpd_resp_set_type(req, "application/json");

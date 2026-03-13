@@ -30,7 +30,4 @@ size_t get_entry_count();
 /// Clear all recorded data and free memory.
 void clear();
 
-/// Get time elapsed since recording started (ms), or 0 if not recording.
-uint32_t elapsed_ms();
-
 }  // namespace recorder
