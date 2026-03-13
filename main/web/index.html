@@ -132,9 +132,6 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
         <span>Txns: <b id="statTxn">0</b></span>
     </div>
     <button onclick="clearLog()" title="Clear display">🧹</button>
-    <label style="font-size:12px;color:var(--muted);margin-left:4px">
-        <input type="checkbox" id="autoScroll" checked> Auto-scroll
-    </label>
 </div>
 
 <div id="log"></div>
@@ -212,13 +209,21 @@ function addTransaction(txn) {
     regs += '</div>';
 
     el.innerHTML = hdr + regs;
+
+    // If user is near the top, stay pinned; otherwise preserve scroll position
+    const nearTop = log.scrollTop < 50;
+    const prevHeight = log.scrollHeight;
+
     log.prepend(el);
 
     // Trim old entries
     while (log.children.length > MAX_LOG) log.removeChild(log.lastChild);
 
-    if (document.getElementById('autoScroll').checked) {
+    if (nearTop) {
         log.scrollTop = 0;
+    } else {
+        // Offset scroll so the same content stays in view
+        log.scrollTop += log.scrollHeight - prevHeight;
     }
 }
 
