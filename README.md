@@ -52,6 +52,9 @@ Once connected to WiFi the device announces itself via mDNS as
 
 All endpoints return/accept JSON.  CORS is enabled.
 
+[**Interactive API docs (Swagger UI)**](https://petstore.swagger.io/?url=https://raw.githubusercontent.com/sslivins/arctic-sniffer/main/docs/openapi.yaml) ·
+[OpenAPI spec](docs/openapi.yaml)
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET`  | `/api/status` | Sniffer stats, recording state |
