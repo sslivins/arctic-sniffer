@@ -403,7 +403,7 @@ esp_err_t init()
 // ---------------------------------------------------------------------------
 
 void refresh(const char *ip, bool recording, size_t rec_used, size_t rec_limit,
-             size_t rec_entries)
+             size_t rec_entries, bool has_psram)
 {
     if (!s_initialized) return;
 
@@ -486,9 +486,14 @@ void refresh(const char *ip, bool recording, size_t rec_used, size_t rec_limit,
         fb_string(4, 108, rem_str, COL_GREY, 1);
 
     } else {
-        fb_string(4, 54, "Ready", COL_GREEN, 1);
-        fb_string(4, 68, "Press btn", COL_GREY, 1);
-        fb_string(4, 78, "to record", COL_GREY, 1);
+        if (has_psram) {
+            fb_string(4, 54, "Ready", COL_GREEN, 1);
+            fb_string(4, 68, "Press btn", COL_GREY, 1);
+            fb_string(4, 78, "to record", COL_GREY, 1);
+        } else {
+            fb_string(4, 54, "Monitoring", COL_GREEN, 1);
+            fb_string(4, 68, "Web UI only", COL_GREY, 1);
+        }
     }
 
     fb_flush();

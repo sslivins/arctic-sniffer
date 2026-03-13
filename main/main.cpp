@@ -14,10 +14,12 @@
 
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include "esp_psram.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 static const char *TAG = "main";
+static bool s_has_psram = false;
 
 // ---------------------------------------------------------------------------
 // Display task — button polling (50 ms) + screen refresh (500 ms)
@@ -29,8 +31,8 @@ static void display_task(void *param)
     int refresh_counter = 0;
 
     while (true) {
-        // Poll button every 50 ms
-        if (display::button_pressed()) {
+        // Poll button every 50 ms — only toggle recording if PSRAM available
+        if (s_has_psram && display::button_pressed()) {
             if (recorder::is_recording()) {
                 recorder::stop();
                 ESP_LOGI(TAG, "Recording stopped (button)");
@@ -48,7 +50,8 @@ static void display_task(void *param)
                 recorder::is_recording(),
                 recorder::get_buffer_used(),
                 recorder::get_buffer_limit(),
-                recorder::get_entry_count()
+                recorder::get_entry_count(),
+                s_has_psram
             );
             refresh_counter = 0;
         }
@@ -72,6 +75,10 @@ extern "C" void app_main()
     if (display::init() != ESP_OK) {
         ESP_LOGW(TAG, "Display init failed — running headless");
     }
+
+    // --- Detect PSRAM (S3R has it, S3 does not) ---
+    s_has_psram = esp_psram_is_initialized();
+    ESP_LOGI(TAG, "PSRAM: %s", s_has_psram ? "available (S3R)" : "not found (S3)");
 
     // --- WiFi ---
     ESP_LOGI(TAG, "Connecting to WiFi...");
