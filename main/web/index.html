@@ -108,6 +108,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
     <div class="status-bar">
         <span><span class="status-dot dot-red" id="wsDot"></span>
               <span id="wsStatus">Disconnected</span></span>
+        <span id="clock" style="color:var(--muted);font-size:13px;margin-left:auto"></span>
     </div>
 </header>
 
@@ -139,6 +140,13 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 <script>
 const log = document.getElementById('log');
 const MAX_LOG = 1000;
+
+// Live clock in header
+setInterval(() => {
+    document.getElementById('clock').textContent =
+        new Date().toLocaleTimeString('en', {hour12:false});
+}, 1000);
+
 let ws = null;
 let recording = false;
 let pendingEntries = [];  // buffered while an item is expanded
