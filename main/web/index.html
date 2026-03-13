@@ -15,11 +15,13 @@ body {
     font-family: 'Segoe UI', system-ui, sans-serif;
     background: var(--bg); color: var(--text);
     font-size: 14px; line-height: 1.5;
+    max-width: 900px; margin: 0 auto;
 }
 header {
     background: var(--surface); border-bottom: 1px solid var(--border);
     padding: 12px 20px; display: flex; align-items: center;
     justify-content: space-between; flex-wrap: wrap; gap: 10px;
+    border-radius: 0 0 8px 8px;
 }
 header h1 { font-size: 18px; font-weight: 600; }
 header h1 span { color: var(--accent); }
@@ -102,7 +104,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 <body>
 
 <header>
-    <h1>❄ Arctic <span>Sniffer</span></h1>
+    <h1>❄ Arctic <span>Sniffer</span> <small id="verLabel" style="font-size:11px;color:var(--muted);font-weight:400"></small></h1>
     <div class="status-bar">
         <span><span class="status-dot dot-red" id="wsDot"></span>
               <span id="wsStatus">Disconnected</span></span>
@@ -116,6 +118,13 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
     <div class="rec-indicator" id="recIndicator">
         <div class="rec-dot"></div> REC
         <span id="recEntries">0 entries</span>
+    </div>
+    <span style="color:var(--border);margin:0 2px">│</span>
+    <button id="btnStream" onclick="toggleStream()">💾 Save to PC</button>
+    <div class="rec-indicator" id="streamIndicator">
+        <div class="rec-dot" style="background:var(--green)"></div>
+        <span style="color:var(--green)">SAVING</span>
+        <span id="streamEntries">0 entries</span>
     </div>
     <div class="stats">
         <span>Frames: <b id="statFrames">0</b></span>
@@ -136,6 +145,14 @@ const MAX_LOG = 500;
 let ws = null;
 let recording = false;
 
+// --- PC streaming save state ---
+let streaming = false;
+let streamWriter = null;   // WritableStreamDefaultWriter (File System Access API)
+let streamFallback = [];   // fallback: in-memory array
+let streamCount = 0;
+let streamStartMs = 0;
+const hasFileAccess = ('showSaveFilePicker' in window);
+
 function connect() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(`${proto}//${location.host}/ws`);
@@ -149,7 +166,11 @@ function connect() {
         setTimeout(connect, 2000);
     };
     ws.onmessage = (e) => {
-        try { addTransaction(JSON.parse(e.data)); } catch {}
+        try {
+            const txn = JSON.parse(e.data);
+            addTransaction(txn);
+            if (streaming) writeStreamLine(txn);
+        } catch {}
     };
 }
 
@@ -242,6 +263,7 @@ async function pollStatus() {
         document.getElementById('statFrames').textContent = s.frames;
         document.getElementById('statCrc').textContent = s.crc_errors;
         document.getElementById('statTxn').textContent = s.transactions;
+        if (s.version) document.getElementById('verLabel').textContent = 'v' + s.version;
         if (s.recording) {
             document.getElementById('recEntries').textContent = s.rec_entries + ' entries';
         }
@@ -252,6 +274,85 @@ async function pollStatus() {
 setInterval(pollStatus, 2000);
 connect();
 pollStatus();
+
+// --- PC streaming save ---
+
+/// Convert a rich WebSocket txn to simulator-compatible JSONL line
+function txnToJsonl(txn) {
+    const t = Date.now() - streamStartMs;
+    if (txn.fc === 3 || txn.fc === 4) {
+        const vals = txn.regs ? txn.regs.map(r => r.raw) : [];
+        return JSON.stringify({t, fc: txn.fc, addr: txn.addr, count: txn.count, values: vals});
+    } else if (txn.fc === 6) {
+        const val = (txn.regs && txn.regs.length) ? txn.regs[0].raw : 0;
+        return JSON.stringify({t, fc: 6, addr: txn.addr, value: val});
+    } else if (txn.fc === 16) {
+        const vals = txn.regs ? txn.regs.map(r => r.raw) : [];
+        return JSON.stringify({t, fc: 16, addr: txn.addr, count: txn.count, values: vals});
+    }
+    return JSON.stringify({t, fc: txn.fc, addr: txn.addr, count: txn.count});
+}
+
+async function writeStreamLine(txn) {
+    const line = txnToJsonl(txn) + '\n';
+    streamCount++;
+    document.getElementById('streamEntries').textContent = streamCount + ' entries';
+    if (streamWriter) {
+        try { await streamWriter.write(new TextEncoder().encode(line)); } catch {}
+    } else {
+        streamFallback.push(line);
+    }
+}
+
+async function toggleStream() {
+    const btn = document.getElementById('btnStream');
+    if (!streaming) {
+        // Start streaming
+        streamCount = 0;
+        streamStartMs = Date.now();
+        streamFallback = [];
+        streamWriter = null;
+
+        if (hasFileAccess) {
+            try {
+                const handle = await window.showSaveFilePicker({
+                    suggestedName: 'capture.jsonl',
+                    types: [{description: 'JSONL', accept: {'application/x-ndjson': ['.jsonl']}}]
+                });
+                const writable = await handle.createWritable();
+                streamWriter = writable;
+            } catch (e) {
+                // User cancelled the dialog
+                return;
+            }
+        }
+
+        streaming = true;
+        btn.textContent = '⏹ Stop Save';
+        btn.className = 'danger';
+        document.getElementById('streamIndicator').classList.add('active');
+    } else {
+        // Stop streaming
+        streaming = false;
+        btn.textContent = '💾 Save to PC';
+        btn.className = '';
+        document.getElementById('streamIndicator').classList.remove('active');
+
+        if (streamWriter) {
+            try { await streamWriter.close(); } catch {}
+            streamWriter = null;
+        } else if (streamFallback.length > 0) {
+            // Fallback: download as blob
+            const blob = new Blob(streamFallback, {type: 'application/x-ndjson'});
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'capture.jsonl';
+            a.click();
+            URL.revokeObjectURL(a.href);
+            streamFallback = [];
+        }
+    }
+}
 </script>
 </body>
 </html>

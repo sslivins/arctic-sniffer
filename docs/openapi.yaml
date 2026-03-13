@@ -1,0 +1,254 @@
+openapi: "3.0.3"
+info:
+  title: Arctic Sniffer API
+  description: |
+    REST API for the Arctic Sniffer — a passive Modbus RTU bus monitor for the
+    Arctic ECO-600 heat pump communication protocol.
+
+    The device also streams decoded transactions over a **WebSocket** at `/ws`.
+  version: 0.1.0
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  contact:
+    name: sslivins
+    url: https://github.com/sslivins/arctic-sniffer
+
+servers:
+  - url: http://arctic-sniffer.local
+    description: mDNS (local network)
+  - url: http://{ip}
+    description: Direct IP
+    variables:
+      ip:
+        default: 192.168.1.100
+
+tags:
+  - name: Status
+    description: Device info and statistics
+  - name: Log
+    description: Recent transaction history
+  - name: Recording
+    description: JSONL traffic capture
+
+paths:
+  /api/status:
+    get:
+      operationId: getStatus
+      summary: Get sniffer status
+      description: Returns device info, bus statistics, recording state, and WebSocket client count.
+      tags: [Status]
+      responses:
+        "200":
+          description: Current sniffer status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+              example:
+                ip: "192.168.1.42"
+                frames: 1254
+                crc_errors: 2
+                transactions: 627
+                recording: false
+                rec_entries: 0
+                rec_elapsed_ms: 0
+                ws_clients: 1
+
+  /api/log:
+    get:
+      operationId: getLog
+      summary: Get recent transactions
+      description: |
+        Returns the last 100 decoded Modbus transactions as a JSON array,
+        oldest first. Each transaction includes function code, register
+        addresses, decoded register names, and human-readable values.
+      tags: [Log]
+      responses:
+        "200":
+          description: Array of recent transactions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Transaction"
+
+  /api/record/start:
+    post:
+      operationId: startRecording
+      summary: Start recording
+      description: |
+        Begins capturing Modbus transactions to an in-memory JSONL buffer.
+        Any existing recording data is cleared.
+      tags: [Recording]
+      responses:
+        "200":
+          description: Recording started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: recording
+
+  /api/record/stop:
+    post:
+      operationId: stopRecording
+      summary: Stop recording
+      description: Stops the active recording. Data remains in memory for download.
+      tags: [Recording]
+      responses:
+        "200":
+          description: Recording stopped
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: stopped
+                  entries:
+                    type: integer
+                    example: 42
+
+  /api/record/download:
+    get:
+      operationId: downloadRecording
+      summary: Download recording
+      description: |
+        Download the captured data as a JSONL file. Each line is a JSON object
+        compatible with [arctic-simulator](https://github.com/sslivins/arctic-simulator)
+        playback mode.
+      tags: [Recording]
+      responses:
+        "200":
+          description: JSONL capture file
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+                example: 'attachment; filename="capture.jsonl"'
+          content:
+            application/x-ndjson:
+              schema:
+                type: string
+              example: |
+                {"t":0,"fc":3,"addr":2100,"count":39,"values":[0,1,2]}
+                {"t":500,"fc":6,"addr":2000,"value":1}
+
+  /api/record:
+    delete:
+      operationId: clearRecording
+      summary: Clear recording data
+      description: Discards all recorded data and frees memory.
+      tags: [Recording]
+      responses:
+        "200":
+          description: Recording data cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: cleared
+
+components:
+  schemas:
+    Status:
+      type: object
+      properties:
+        ip:
+          type: string
+          description: Device IP address
+          example: "192.168.1.42"
+        frames:
+          type: integer
+          description: Total Modbus frames received
+          example: 1254
+        crc_errors:
+          type: integer
+          description: Total CRC validation failures
+          example: 2
+        transactions:
+          type: integer
+          description: Total paired request/response transactions
+          example: 627
+        recording:
+          type: boolean
+          description: Whether recording is currently active
+          example: false
+        rec_entries:
+          type: integer
+          description: Number of entries in the current recording
+          example: 0
+        rec_elapsed_ms:
+          type: integer
+          description: Milliseconds since recording started (0 if not recording)
+          example: 0
+        ws_clients:
+          type: integer
+          description: Number of connected WebSocket clients
+          example: 1
+
+    Transaction:
+      type: object
+      properties:
+        ts:
+          type: integer
+          description: Timestamp in milliseconds (since boot)
+          example: 123456
+        slave:
+          type: integer
+          description: Modbus slave address
+          example: 1
+        fc:
+          type: integer
+          description: Modbus function code
+          example: 3
+        fc_name:
+          type: string
+          description: Human-readable function code name
+          example: Read Holding Registers
+        addr:
+          type: integer
+          description: Starting register address
+          example: 2100
+        count:
+          type: integer
+          description: Number of registers
+          example: 5
+        error:
+          type: integer
+          description: Modbus exception code (0 = none)
+          example: 0
+        regs:
+          type: array
+          description: Decoded register values
+          items:
+            $ref: "#/components/schemas/RegisterValue"
+
+    RegisterValue:
+      type: object
+      properties:
+        addr:
+          type: integer
+          description: Register address
+          example: 2100
+        raw:
+          type: integer
+          description: Raw 16-bit register value
+          example: 250
+        name:
+          type: string
+          description: Human-readable register name
+          example: T_outdoor
+        value:
+          type: string
+          description: Formatted value with units
+          example: "25.0 °C"

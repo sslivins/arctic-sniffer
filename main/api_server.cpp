@@ -11,6 +11,7 @@
 
 #include "esp_log.h"
 #include "esp_http_server.h"
+#include "esp_app_desc.h"
 
 static const char *TAG = "api";
 
@@ -132,12 +133,15 @@ static esp_err_t handle_status(httpd_req_t *req)
         ws_count = (unsigned)s_ws_fds.size();
     }
 
+    const esp_app_desc_t *app = esp_app_get_description();
+
     char buf[512];
     int len = snprintf(buf, sizeof(buf),
-        "{\"ip\":\"%s\",\"frames\":%lu,\"crc_errors\":%lu,"
+        "{\"version\":\"%s\",\"ip\":\"%s\",\"frames\":%lu,\"crc_errors\":%lu,"
         "\"transactions\":%lu,\"recording\":%s,"
         "\"rec_entries\":%lu,\"rec_elapsed_ms\":%lu,"
         "\"ws_clients\":%u}",
+        app->version,
         wifi::get_ip(),
         (unsigned long)sniffer::get_frame_count(),
         (unsigned long)sniffer::get_crc_errors(),
