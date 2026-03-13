@@ -210,8 +210,10 @@ function addTransaction(txn) {
 
     el.innerHTML = hdr + regs;
 
-    // If user is near the top, stay pinned; otherwise preserve scroll position
+    // If user is near the top and not inspecting an expanded item, stay pinned;
+    // otherwise preserve scroll position so the view doesn't jump.
     const nearTop = log.scrollTop < 50;
+    const hasExpanded = log.querySelector('.txn.expanded') !== null;
     const prevHeight = log.scrollHeight;
 
     log.prepend(el);
@@ -219,7 +221,7 @@ function addTransaction(txn) {
     // Trim old entries
     while (log.children.length > MAX_LOG) log.removeChild(log.lastChild);
 
-    if (nearTop) {
+    if (nearTop && !hasExpanded) {
         log.scrollTop = 0;
     } else {
         // Offset scroll so the same content stays in view
