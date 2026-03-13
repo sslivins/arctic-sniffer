@@ -5,6 +5,7 @@
 #include <cstring>
 #include <string>
 #include <mutex>
+#include <functional>
 
 #include "esp_log.h"
 
@@ -20,6 +21,7 @@ static std::mutex  s_mutex;
 static bool        s_recording = false;
 static std::string s_buffer;          // JSONL accumulator
 static size_t      s_entry_count = 0;
+static std::function<void()> s_auto_stop_cb;
 
 // Reserve 128 KB initial buffer to reduce reallocations
 constexpr size_t INITIAL_RESERVE = 128 * 1024;
@@ -53,7 +55,7 @@ bool is_recording()
 
 void add(const sniffer::Transaction &txn)
 {
-    std::lock_guard<std::mutex> lock(s_mutex);
+    std::unique_lock<std::mutex> lock(s_mutex);
     if (!s_recording) return;
 
     // Format epoch ms manually — %lld unreliable on Xtensa
@@ -110,6 +112,18 @@ void add(const sniffer::Transaction &txn)
 
     s_buffer.append(line, off);
     s_entry_count++;
+
+    // Auto-stop if buffer is full
+    if (s_buffer.size() >= MAX_BUFFER_SIZE) {
+        s_recording = false;
+        ESP_LOGW(TAG, "Recording auto-stopped — buffer full (%u bytes)",
+                 (unsigned)s_buffer.size());
+        if (s_auto_stop_cb) {
+            // Release lock before callback to avoid deadlock
+            lock.unlock();
+            s_auto_stop_cb();
+        }
+    }
 }
 
 const char *get_data(size_t &len)
@@ -132,6 +146,23 @@ void clear()
     s_buffer.shrink_to_fit();
     s_entry_count = 0;
     ESP_LOGI(TAG, "Recording data cleared");
+}
+
+void set_auto_stop_callback(std::function<void()> cb)
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+    s_auto_stop_cb = cb;
+}
+
+size_t get_buffer_used()
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+    return s_buffer.size();
+}
+
+size_t get_buffer_limit()
+{
+    return MAX_BUFFER_SIZE;
 }
 
 }  // namespace recorder

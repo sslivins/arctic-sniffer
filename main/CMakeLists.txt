@@ -12,6 +12,9 @@ idf_component_register(
          "recorder.cpp"
          "api_server.cpp"
          "wifi_manager.cpp"
+         "display.cpp"
     INCLUDE_DIRS "."
     EMBED_FILES "web/index.html.gz"
+    REQUIRES driver esp_app_format esp_http_server esp_wifi esp_netif
+             nvs_flash json esp_timer esp_lcd
 )

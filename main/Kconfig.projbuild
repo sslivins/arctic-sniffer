@@ -47,4 +47,50 @@ menu "Arctic Sniffer Configuration"
                 Baud rate for the Modbus RTU bus.
     endmenu
 
+    menu "Display & Button"
+
+        config SNIFFER_LCD_MOSI
+            int "LCD MOSI GPIO"
+            default 21
+
+        config SNIFFER_LCD_CLK
+            int "LCD CLK GPIO"
+            default 15
+
+        config SNIFFER_LCD_CS
+            int "LCD CS GPIO"
+            default 14
+
+        config SNIFFER_LCD_DC
+            int "LCD DC (Data/Command) GPIO"
+            default 42
+
+        config SNIFFER_LCD_RST
+            int "LCD Reset GPIO"
+            default 48
+
+        config SNIFFER_LCD_BL
+            int "LCD Backlight GPIO (fallback)"
+            default 16
+
+        config SNIFFER_LCD_BL_I2C
+            bool "Use I2C backlight controller (Atom S3R)"
+            default y
+
+        config SNIFFER_LCD_BL_I2C_SDA
+            int "I2C backlight SDA GPIO"
+            default 45
+            depends on SNIFFER_LCD_BL_I2C
+
+        config SNIFFER_LCD_BL_I2C_SCL
+            int "I2C backlight SCL GPIO"
+            default 0
+            depends on SNIFFER_LCD_BL_I2C
+
+        config SNIFFER_BTN_GPIO
+            int "Front button GPIO"
+            default 41
+
+    endmenu
+
 endmenu
