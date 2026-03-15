@@ -1,0 +1,184 @@
+name: Create Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (check version and build without releasing)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from CMakeLists.txt
+        id: version
+        run: |
+          VERSION=$(grep -oP 'set\(PROJECT_VER\s*"\K[^"]+' CMakeLists.txt)
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not extract PROJECT_VER from CMakeLists.txt"
+            exit 1
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+          echo "📦 Found version: $VERSION (tag: v$VERSION)"
+
+      - name: Check if tag already exists
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists! Bump PROJECT_VER in CMakeLists.txt first."
+            exit 1
+          fi
+          echo "✅ Tag $TAG does not exist yet"
+
+      - name: ESP-IDF Build
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.4.3
+          target: esp32s3
+          path: '.'
+
+      - name: Dry run summary
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "🔍 Dry run complete"
+          echo "Version: ${{ steps.version.outputs.version }}"
+          echo "Tag: ${{ steps.version.outputs.tag }}"
+          echo "Build: ✅ Success"
+          echo "No tag or release was created."
+
+      - name: Create and push tag
+        if: ${{ !inputs.dry_run }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${{ steps.version.outputs.version }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git tag -a "$TAG" -m "Release $VERSION"
+          git push origin "$TAG"
+
+          echo "🏷️ Created tag: $TAG"
+
+      - name: Upload firmware artifact
+        if: ${{ !inputs.dry_run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ steps.version.outputs.tag }}
+          path: |
+            build/arctic-sniffer.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+          retention-days: 90
+
+      - name: Generate changelog from conventional commits
+        if: ${{ !inputs.dry_run }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Find the previous tag
+          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${TAG}$" | head -n1)
+          if [ -z "$PREV_TAG" ]; then
+            RANGE="HEAD"
+          else
+            RANGE="${PREV_TAG}..HEAD"
+          fi
+          echo "Generating changelog: ${PREV_TAG:-initial}..${TAG}"
+
+          # Collect commits by category
+          FEATURES=$(git log ${RANGE} --oneline --no-merges --grep="^feat" | sed 's/^[a-f0-9]* feat[^:]*: //' || true)
+          FIXES=$(git log ${RANGE} --oneline --no-merges --grep="^fix" | sed 's/^[a-f0-9]* fix[^:]*: //' || true)
+          REFACTORS=$(git log ${RANGE} --oneline --no-merges --grep="^refactor" | sed 's/^[a-f0-9]* refactor[^:]*: //' || true)
+          DOCS=$(git log ${RANGE} --oneline --no-merges --grep="^docs" | sed 's/^[a-f0-9]* docs[^:]*: //' || true)
+          CI_CHANGES=$(git log ${RANGE} --oneline --no-merges --grep="^ci" | sed 's/^[a-f0-9]* ci[^:]*: //' || true)
+
+          # Build release body
+          {
+            echo "## Arctic Sniffer ${TAG}"
+            echo ""
+
+            if [ -n "$FEATURES" ]; then
+              echo "### ✨ Features"
+              echo "$FEATURES" | while IFS= read -r line; do echo "- $line"; done
+              echo ""
+            fi
+            if [ -n "$FIXES" ]; then
+              echo "### 🐛 Fixes"
+              echo "$FIXES" | while IFS= read -r line; do echo "- $line"; done
+              echo ""
+            fi
+            if [ -n "$REFACTORS" ]; then
+              echo "### ♻️ Refactors"
+              echo "$REFACTORS" | while IFS= read -r line; do echo "- $line"; done
+              echo ""
+            fi
+            if [ -n "$DOCS" ]; then
+              echo "### 📝 Documentation"
+              echo "$DOCS" | while IFS= read -r line; do echo "- $line"; done
+              echo ""
+            fi
+            if [ -n "$CI_CHANGES" ]; then
+              echo "### 🔧 CI"
+              echo "$CI_CHANGES" | while IFS= read -r line; do echo "- $line"; done
+              echo ""
+            fi
+
+            echo "---"
+            echo ""
+            echo "### Installation (USB only)"
+            echo ""
+            echo "Download all files and flash with esptool:"
+            echo '```bash'
+            echo "esptool.py --chip esp32s3 write_flash \\"
+            echo "  0x0 bootloader.bin \\"
+            echo "  0x8000 partition-table.bin \\"
+            echo "  0x10000 arctic-sniffer.bin"
+            echo '```'
+          } > /tmp/release_body.md
+
+          echo "📋 Generated release body:"
+          cat /tmp/release_body.md
+
+      - name: Create GitHub Release
+        if: ${{ !inputs.dry_run }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Arctic Sniffer ${{ steps.version.outputs.tag }}
+          body_path: /tmp/release_body.md
+          draft: false
+          files: |
+            build/arctic-sniffer.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release summary
+        if: ${{ !inputs.dry_run }}
+        run: |
+          echo "## Release Created ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | ${{ steps.version.outputs.version }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tag | ${{ steps.version.outputs.tag }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Target | esp32s3 |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Files" >> $GITHUB_STEP_SUMMARY
+          echo "- \`arctic-sniffer.bin\` — Main firmware" >> $GITHUB_STEP_SUMMARY
+          echo "- \`bootloader.bin\` — Bootloader" >> $GITHUB_STEP_SUMMARY
+          echo "- \`partition-table.bin\` — Partition table" >> $GITHUB_STEP_SUMMARY
