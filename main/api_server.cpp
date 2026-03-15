@@ -153,6 +153,7 @@ static esp_err_t handle_status(httpd_req_t *req)
         "{\"version\":\"%s\",\"ip\":\"%s\",\"frames\":%lu,\"crc_errors\":%lu,"
         "\"transactions\":%lu,\"recording\":%s,"
         "\"rec_entries\":%lu,"
+        "\"rec_available\":%s,"
         "\"ws_clients\":%u}",
         app->version,
         wifi::get_ip(),
@@ -161,6 +162,7 @@ static esp_err_t handle_status(httpd_req_t *req)
         (unsigned long)sniffer::get_transaction_count(),
         recorder::is_recording() ? "true" : "false",
         (unsigned long)recorder::get_entry_count(),
+        recorder::has_memory_recording() ? "true" : "false",
         ws_count);
 
     httpd_resp_set_type(req, "application/json");
@@ -205,8 +207,13 @@ static esp_err_t handle_log(httpd_req_t *req)
 static esp_err_t handle_record_start(httpd_req_t *req)
 {
     set_cors(req);
-    recorder::start();
     httpd_resp_set_type(req, "application/json");
+    if (!recorder::has_memory_recording()) {
+        httpd_resp_set_status(req, "409 Conflict");
+        return httpd_resp_sendstr(req,
+            "{\"error\":\"No PSRAM — in-memory recording unavailable\"}");
+    }
+    recorder::start();
     return httpd_resp_sendstr(req, "{\"status\":\"recording\"}");
 }
 

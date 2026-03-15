@@ -2,22 +2,34 @@ menu "Arctic Sniffer Configuration"
 
     menu "WiFi"
         config WIFI_SSID
-            string "WiFi SSID"
-            default "your_ssid"
+            string "WiFi SSID (fallback)"
+            default ""
             help
-                SSID of the WiFi network to connect to.
+                Fallback WiFi SSID used only when no credentials are stored
+                in NVS (i.e. the captive portal has not been used yet).
+                Leave empty to always start in provisioning mode.
 
         config WIFI_PASSWORD
-            string "WiFi Password"
-            default "your_password"
+            string "WiFi Password (fallback)"
+            default ""
             help
-                Password for the WiFi network.
+                Fallback WiFi password (paired with the SSID above).
 
         config MDNS_HOSTNAME
-            string "mDNS Hostname"
+            string "mDNS Hostname (base)"
             default "arctic-sniffer"
             help
-                mDNS hostname (accessible as <hostname>.local).
+                Base mDNS hostname.  On boot the device probes the network
+                for collisions and appends a suffix if needed:
+                arctic-sniffer.local, arctic-sniffer-2.local, …
+
+        config WIFI_RESET_HOLD_MS
+            int "Button hold time to reset WiFi (ms)"
+            default 3000
+            range 1000 10000
+            help
+                Hold the front button for this long to erase stored WiFi
+                credentials and reboot into provisioning (SoftAP) mode.
     endmenu
 
     menu "RS-485 / UART"
@@ -45,6 +57,52 @@ menu "Arctic Sniffer Configuration"
             default 2400
             help
                 Baud rate for the Modbus RTU bus.
+    endmenu
+
+    menu "Display & Button"
+
+        config SNIFFER_LCD_MOSI
+            int "LCD MOSI GPIO"
+            default 21
+
+        config SNIFFER_LCD_CLK
+            int "LCD CLK GPIO"
+            default 15
+
+        config SNIFFER_LCD_CS
+            int "LCD CS GPIO"
+            default 14
+
+        config SNIFFER_LCD_DC
+            int "LCD DC (Data/Command) GPIO"
+            default 42
+
+        config SNIFFER_LCD_RST
+            int "LCD Reset GPIO"
+            default 48
+
+        config SNIFFER_LCD_BL
+            int "LCD Backlight GPIO (fallback)"
+            default 16
+
+        config SNIFFER_LCD_BL_I2C
+            bool "Use I2C backlight controller (Atom S3R)"
+            default y
+
+        config SNIFFER_LCD_BL_I2C_SDA
+            int "I2C backlight SDA GPIO"
+            default 45
+            depends on SNIFFER_LCD_BL_I2C
+
+        config SNIFFER_LCD_BL_I2C_SCL
+            int "I2C backlight SCL GPIO"
+            default 0
+            depends on SNIFFER_LCD_BL_I2C
+
+        config SNIFFER_BTN_GPIO
+            int "Front button GPIO"
+            default 41
+
     endmenu
 
 endmenu
