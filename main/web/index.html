@@ -113,6 +113,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 </header>
 
 <div class="controls">
+    <span id="recControls" style="display:none">
     <button id="btnRecord" class="primary" onclick="toggleRecord()">⏺ Record</button>
     <button id="btnDownload" onclick="download()" disabled>⬇ Download</button>
     <button id="btnClear" class="danger" onclick="clearRec()" disabled>🗑 Clear</button>
@@ -121,7 +122,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
         <span id="recEntries">0 entries</span>
     </div>
     <span style="color:var(--border);margin:0 2px">│</span>
-    <button id="btnStream" onclick="toggleStream()">💾 Save to PC</button>
+    </span>
+    <button id="btnStream" onclick="toggleStream()">💾 Record to PC</button>
     <div class="rec-indicator" id="streamIndicator">
         <div class="rec-dot" style="background:var(--green)"></div>
         <span style="color:var(--green)">SAVING</span>
@@ -299,6 +301,27 @@ async function pollStatus() {
         if (s.recording) {
             document.getElementById('recEntries').textContent = s.rec_entries + ' entries';
         }
+        // Sync recording state (e.g. started/stopped via physical button)
+        if (s.recording !== recording) {
+            recording = s.recording;
+            const btn = document.getElementById('btnRecord');
+            if (recording) {
+                btn.textContent = '⏹ Stop';
+                btn.className = 'danger';
+                document.getElementById('recIndicator').classList.add('active');
+                document.getElementById('btnDownload').disabled = true;
+                document.getElementById('btnClear').disabled = true;
+            } else {
+                btn.textContent = '⏺ Record';
+                btn.className = 'primary';
+                document.getElementById('recIndicator').classList.remove('active');
+                document.getElementById('btnDownload').disabled = false;
+                document.getElementById('btnClear').disabled = false;
+            }
+        }
+        if (s.rec_available) {
+            document.getElementById('recControls').style.display = '';
+        }
     } catch {}
 }
 
@@ -366,7 +389,7 @@ async function toggleStream() {
     } else {
         // Stop streaming
         streaming = false;
-        btn.textContent = '💾 Save to PC';
+        btn.textContent = '💾 Record to PC';
         btn.className = '';
         document.getElementById('streamIndicator').classList.remove('active');
 
