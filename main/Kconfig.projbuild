@@ -2,22 +2,34 @@ menu "Arctic Sniffer Configuration"
 
     menu "WiFi"
         config WIFI_SSID
-            string "WiFi SSID"
-            default "your_ssid"
+            string "WiFi SSID (fallback)"
+            default ""
             help
-                SSID of the WiFi network to connect to.
+                Fallback WiFi SSID used only when no credentials are stored
+                in NVS (i.e. the captive portal has not been used yet).
+                Leave empty to always start in provisioning mode.
 
         config WIFI_PASSWORD
-            string "WiFi Password"
-            default "your_password"
+            string "WiFi Password (fallback)"
+            default ""
             help
-                Password for the WiFi network.
+                Fallback WiFi password (paired with the SSID above).
 
         config MDNS_HOSTNAME
-            string "mDNS Hostname"
+            string "mDNS Hostname (base)"
             default "arctic-sniffer"
             help
-                mDNS hostname (accessible as <hostname>.local).
+                Base mDNS hostname.  On boot the device probes the network
+                for collisions and appends a suffix if needed:
+                arctic-sniffer.local, arctic-sniffer-2.local, …
+
+        config WIFI_RESET_HOLD_MS
+            int "Button hold time to reset WiFi (ms)"
+            default 3000
+            range 1000 10000
+            help
+                Hold the front button for this long to erase stored WiFi
+                credentials and reboot into provisioning (SoftAP) mode.
     endmenu
 
     menu "RS-485 / UART"

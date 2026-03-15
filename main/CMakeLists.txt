@@ -5,6 +5,13 @@ execute_process(
             ${CMAKE_CURRENT_SOURCE_DIR}/web/index.html.gz
 )
 
+# Gzip the captive portal page during configure
+execute_process(
+    COMMAND python ${CMAKE_CURRENT_SOURCE_DIR}/web/gzip_html.py
+            ${CMAKE_CURRENT_SOURCE_DIR}/web/portal.html
+            ${CMAKE_CURRENT_SOURCE_DIR}/web/portal.html.gz
+)
+
 idf_component_register(
     SRCS "main.cpp"
          "modbus_sniffer.cpp"
@@ -12,9 +19,11 @@ idf_component_register(
          "recorder.cpp"
          "api_server.cpp"
          "wifi_manager.cpp"
+         "dns_server.cpp"
          "display.cpp"
     INCLUDE_DIRS "."
     EMBED_FILES "web/index.html.gz"
+                "web/portal.html.gz"
     REQUIRES driver esp_app_format esp_http_server esp_wifi esp_netif
-             nvs_flash json esp_timer esp_lcd
+             nvs_flash json esp_timer esp_lcd esp_psram lwip
 )
