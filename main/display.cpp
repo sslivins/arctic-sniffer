@@ -417,7 +417,7 @@ void refresh(const char *ip, bool recording, size_t rec_used, size_t rec_limit,
 
     // Version
     const esp_app_desc_t *app = esp_app_get_description();
-    char ver[24];
+    char ver[40];
     snprintf(ver, sizeof(ver), "v%s", app->version);
     fb_string(4, 16, ver, COL_GREY, 1);
 
@@ -495,6 +495,66 @@ void refresh(const char *ip, bool recording, size_t rec_used, size_t rec_limit,
             fb_string(4, 68, "Web UI only", COL_GREY, 1);
         }
     }
+
+    fb_flush();
+}
+
+// ---------------------------------------------------------------------------
+// refresh_provisioning() — WiFi setup screen
+// ---------------------------------------------------------------------------
+
+void refresh_provisioning(const char *ap_name)
+{
+    if (!s_initialized) return;
+
+    s_blink_on = !s_blink_on;
+
+    fb_clear(COL_BLACK);
+
+    // App name — top
+    fb_string(4, 4, "Arctic Sniffer", COL_CYAN, 1);
+
+    // Version
+    const esp_app_desc_t *app = esp_app_get_description();
+    char ver[40];
+    snprintf(ver, sizeof(ver), "v%s", app->version);
+    fb_string(4, 16, ver, COL_GREY, 1);
+
+    // Separator
+    fb_rect(4, 28, 120, 1, COL_DKGREY);
+
+    // WiFi Setup header
+    static constexpr uint16_t COL_YELLOW = 0xFFE0;
+    fb_string(4, 34, "WiFi Setup", COL_YELLOW, 1);
+
+    // Separator
+    fb_rect(4, 46, 120, 1, COL_DKGREY);
+
+    // Instructions
+    fb_string(4, 52, "Connect to:", COL_GREY, 1);
+
+    // AP name — larger font for visibility
+    if (ap_name && ap_name[0]) {
+        // Check if it fits at scale 1 (max ~21 chars)
+        int len = (int)strlen(ap_name);
+        if (len <= 10) {
+            // Center at scale 2
+            int x = (LCD_W - len * CHAR_W * 2) / 2;
+            fb_string(x, 66, ap_name, COL_WHITE, 2);
+        } else {
+            // Scale 1, left-aligned
+            fb_string(4, 68, ap_name, COL_WHITE, 1);
+        }
+    }
+
+    // Pulsing dot to show the device is alive
+    if (s_blink_on) {
+        fb_circle(120, 36, 3, COL_GREEN);
+    }
+
+    // Bottom instructions
+    fb_string(4, 96, "then open", COL_GREY, 1);
+    fb_string(4, 108, "192.168.4.1", COL_WHITE, 1);
 
     fb_flush();
 }

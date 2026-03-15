@@ -23,6 +23,9 @@ esp_err_t init();
 void refresh(const char *ip, bool recording, size_t rec_used, size_t rec_limit,
              size_t rec_entries, bool has_psram);
 
+/// Redraw provisioning-mode screen showing AP SSID and setup instructions.
+void refresh_provisioning(const char *ap_name);
+
 /// Poll the front button.  Returns true once per press (debounced).
 bool button_pressed();
 
