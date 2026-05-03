@@ -61,8 +61,8 @@ a **Tuya `55 AA`-style envelope** wrapping Arctic-defined fields:
 
 ```
 +------+------+-------+-----+-----------+-----------+----------+--------+
-| 0x55 | 0xAA |  dir  | fc  |  field A  |  field B  |  data    |  chk   |
-| (1B) | (1B) | (1B)  |(1B) |  (2B BE)  |  (2B BE)  |  (B B)   | (1-2B) |
+| 0x55 | 0xAA |  dir  | fc  |   addr    |   count   |  data    |  chk   |
+| (1B) | (1B) | (1B)  |(1B) |  (2B BE)  |  (2B BE)  | (count B)|  (1B)  |
 +------+------+-------+-----+-----------+-----------+----------+--------+
 ```
 
@@ -71,20 +71,22 @@ a **Tuya `55 AA`-style envelope** wrapping Arctic-defined fields:
 | `0x55 0xAA` | Tuya frame header. Every frame starts with this. |
 | `dir`  | Direction byte. `0xF0` = controller → heat pump (request); `0x0F` = heat pump → controller (response). |
 | `fc`   | Function code, mirrors Modbus FC numbering. `0x03` = read register block. (Other codes — `0x06` single write, `0x10` multi-write — not yet observed; expected to follow the same envelope.) |
-| `field A` | Starting offset (in bytes) into the unified register page. |
-| `field B` | Length (in bytes) of the register region being read/returned. |
-| `data` | Present only on responses. Exactly `field B` bytes. **One byte per Arctic register** — not the 2 bytes per register that classic Modbus uses. Apply each register's documented scale factor (see `arctic_registers.cpp`). |
-| `chk`  | Trailing checksum. **Algorithm not yet identified**: simple sum-8, ~sum-8, XOR, CRC-8 (poly 0x07, 0x31, etc.) all fail to match. Requests carry **1 byte**, responses carry **2 bytes**. Treated as opaque for now. |
+| `addr` | Starting offset (in bytes) into the unified register page. |
+| `count` | Number of bytes to read / returned. Echoed unchanged on the response. |
+| `data` | Present **only on responses**. Exactly `count` bytes. **One byte per Arctic register** — not the 2 bytes per register that classic Modbus uses. Apply each register's documented scale factor (see `arctic_registers.cpp`). |
+| `chk`  | 1-byte trailing checksum. Algorithm: `chk = (0xFF - sum(bytes_after_55AA_through_byte_before_chk)) & 0xFF`, i.e. one's complement of the truncated sum. Standard Tuya MCU style. **Validates 100% across every captured frame.** |
+
+**Total length:** Request = 9 bytes (no data section). Response = `9 + count` bytes.
 
 ### Register layout
 
 Live polling uses two `fc=0x03` reads in rotation, which together cover a
 108-byte unified page:
 
-| `field A` | `field B` | Block | Arctic register range |
-|-----------|-----------|-------|-----------------------|
-|     0     |    50     | Telemetry / status (input regs) | 2100–2138 (+reserved) |
-|    50     |    58     | Setpoints / config (holding regs) | 2000–2057 |
+| `addr` | `count` | Block | Arctic register range |
+|--------|---------|-------|-----------------------|
+|     0  |   50    | Telemetry / status (input regs) | 2100–2138 (+reserved) |
+|    50  |   58    | Setpoints / config (holding regs) | 2000–2057 |
 
 Inside the **telemetry block**, the first **7 bytes are a static prefix**
 (`0a 28 32 05 01 00 0f` consistently) — likely device-info / framing
@@ -99,14 +101,14 @@ defined in `arctic_registers.h`.
 Controller → pump (request):
 55 AA F0 03 00 00 00 32 DA
        │  │  └──┬──┘ └──┬──┘ │
-       │  │     │       │     └─ checksum (1 B)
-       │  │     │       └─ field B = 0x32 = 50 (read 50 bytes)
-       │  │     └─ field A = 0   (offset 0 = telemetry block)
+       │  │     │       │     └─ chk = ~sum(F0 03 00 00 00 32) & 0xFF = 0xDA
+       │  │     │       └─ count = 0x0032 = 50  (read 50 bytes)
+       │  │     └─ addr  = 0   (offset 0 = telemetry block)
        │  └─ fc = 0x03 (read)
        └─ dir = 0xF0 (request)
 
 Pump → controller (response):
-55 AA 0F 03 00 00 00 32 [50 bytes register data] [2-byte checksum]
+55 AA 0F 03 00 00 00 32 [50 bytes register data] [1 byte chk]
        │
        └─ dir = 0x0F (response)
 ```
@@ -124,9 +126,6 @@ byte  reg   name                value
 
 ### Open questions
 
-- **Checksum algorithm** — neither sum-8 nor any common CRC-8/CRC-16 variant
-  validates. Requests use 1 byte, responses use 2.  Probably a Tuya-specific
-  routine; see Tuya MCU documentation for candidates.
 - **Static 7-byte prefix in the telemetry block** — looks like device-info or
   a Tuya-style DataPoint header (`0a 28 32 05 01 00 0f`), but the exact
   encoding is undecoded.

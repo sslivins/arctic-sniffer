@@ -22,14 +22,19 @@ namespace sniffer {
 //
 // What's actually on the wire (NOT the V1.3 PDF's plain Modbus RTU):
 //
-//   55 AA <dir:1> <fc:1> <fieldA:2BE> <fieldB:2BE> [data:B bytes] <chk>
+//   55 AA <dir:1> <fc:1> <addr:2BE> <count:2BE> [data:count bytes] <chk:1>
 //
 //   dir   : 0xF0 = controller -> heat pump (request)
 //           0x0F = heat pump -> controller (response)
 //   fc    : 0x03 = read register block (only FC observed)
-//   fieldA: starting BYTE offset into the unified register page
-//   fieldB: number of bytes to read
-//   chk   : 1 byte on requests, 2 bytes on responses (algorithm unknown)
+//   addr  : starting BYTE offset into the unified register page
+//   count : number of bytes to read (response data length)
+//   chk   : 1 byte; chk = (0xFF - sum(bytes_after_55AA_through_byte_before_chk)) & 0xFF
+//           equivalently: ~sum & 0xFF (one's complement of sum), Tuya MCU style.
+//
+// Total length:
+//   Request  = 9 bytes (no data field, just the query header + chk)
+//   Response = 9 + count bytes (header + count data bytes + chk)
 //
 // Two polls are observed in rotation:
 //   A=0  B=50 -> "telemetry" (input regs 2100+; bytes 0..6 are a static
@@ -56,9 +61,8 @@ constexpr uint8_t  TUYA_HDR1   = 0xAA;
 constexpr uint8_t  DIR_REQUEST  = 0xF0;
 constexpr uint8_t  DIR_RESPONSE = 0x0F;
 constexpr uint8_t  FC_READ      = 0x03;
-constexpr size_t   TUYA_HDR_LEN = 8;   // 55 AA dir fc A:2 B:2
-constexpr size_t   REQ_CHK_LEN  = 1;
-constexpr size_t   RESP_CHK_LEN = 2;
+constexpr size_t   TUYA_HDR_LEN = 8;   // 55 AA dir fc addr:2 count:2
+constexpr size_t   CHK_LEN      = 1;
 
 // Known register windows (fieldA -> Arctic register base, prefix length)
 struct RegWindow {
@@ -125,9 +129,18 @@ static bool header_sane(uint8_t dir, uint8_t fc, uint16_t a, uint16_t b)
 /// or a value > MAX_FRAME if the header is unreasonable.
 static size_t tuya_frame_len(uint8_t dir, uint16_t b)
 {
-    if (dir == DIR_REQUEST)  return TUYA_HDR_LEN + REQ_CHK_LEN;            // 9
-    if (dir == DIR_RESPONSE) return TUYA_HDR_LEN + b + RESP_CHK_LEN;       // 10+B
+    if (dir == DIR_REQUEST)  return TUYA_HDR_LEN + CHK_LEN;            // 9
+    if (dir == DIR_RESPONSE) return TUYA_HDR_LEN + b + CHK_LEN;        // 9+count
     return 0;
+}
+
+/// Compute the Tuya-style 1-byte checksum over a complete frame.
+/// chk = (0xFF - sum(bytes_after_55AA_through_byte_before_chk)) & 0xFF
+static uint8_t compute_chk(const uint8_t *buf, size_t frame_len)
+{
+    uint32_t s = 0;
+    for (size_t i = 2; i + 1 < frame_len; ++i) s += buf[i];
+    return (uint8_t)((0xFF - (s & 0xFF)) & 0xFF);
 }
 
 // ---------------------------------------------------------------------------
@@ -184,6 +197,16 @@ static void process_frame(const uint8_t *buf, size_t len)
     uint8_t  fc  = buf[3];
     uint16_t a   = (uint16_t)(buf[4] << 8) | buf[5];
     uint16_t b   = (uint16_t)(buf[6] << 8) | buf[7];
+
+    // Validate checksum
+    uint8_t chk_expected = compute_chk(buf, len);
+    uint8_t chk_actual   = buf[len - 1];
+    if (chk_expected != chk_actual) {
+        ESP_LOGW(TAG, "Bad chk dir=0x%02X A=%u B=%u expect=0x%02X got=0x%02X",
+                 dir, a, b, chk_expected, chk_actual);
+        s_crc_errors.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
 
     const RegWindow *win = find_window(a, b);
     if (!win) return;  // header_sane should have caught this
@@ -276,7 +299,7 @@ static size_t find_frame_start()
 static void try_extract_frames()
 {
     int iters = 0;
-    while (s_blob_len >= TUYA_HDR_LEN + REQ_CHK_LEN && iters++ < 32) {
+    while (s_blob_len >= TUYA_HDR_LEN + CHK_LEN && iters++ < 32) {
         size_t start = find_frame_start();
         if (start == s_blob_len) {
             // No frame start found; drop everything except the last byte
