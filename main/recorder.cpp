@@ -222,6 +222,47 @@ size_t get_buffer_used()
     return s_buffer_used;
 }
 
+void add_raw(const uint8_t *data, size_t len, int64_t timestamp_ms)
+{
+    if (len == 0) return;
+
+    std::unique_lock<std::mutex> lock(s_mutex);
+    if (!s_recording || !s_buffer) return;
+
+    // Each byte = 2 hex chars; plus JSON wrapper of ~32 chars.
+    const size_t need = len * 2 + 48;
+    size_t remaining = s_buffer_cap - s_buffer_used;
+    if (remaining < need) {
+        s_recording = false;
+        ESP_LOGW(TAG, "Recording auto-stopped — buffer full (%uKB)",
+                 (unsigned)(s_buffer_used / 1024));
+        if (s_auto_stop_cb) {
+            auto cb = s_auto_stop_cb;
+            lock.unlock();
+            cb();
+        }
+        return;
+    }
+
+    char ts_buf[24];
+    format_i64(timestamp_ms, ts_buf);
+
+    char *p = s_buffer + s_buffer_used;
+    int hdr = snprintf(p, remaining, "{\"t\":%s,\"raw\":\"", ts_buf);
+    if (hdr <= 0 || (size_t)hdr >= remaining) return;
+    p += hdr;
+
+    static const char HEX[] = "0123456789abcdef";
+    for (size_t i = 0; i < len; ++i) {
+        *p++ = HEX[(data[i] >> 4) & 0xF];
+        *p++ = HEX[data[i] & 0xF];
+    }
+    *p++ = '"'; *p++ = '}'; *p++ = '\n';
+
+    s_buffer_used += (size_t)(p - (s_buffer + s_buffer_used));
+    s_entry_count++;
+}
+
 size_t get_buffer_limit()
 {
     return s_buffer_cap;
