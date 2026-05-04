@@ -54,11 +54,15 @@ static const RegEntry s_registers[] = {
     { 2057, { "Freq Control Setting",   "Hz",    1.0f, false } },
 
     // Input registers (read-only) — 2100–2138
-    // Temperature registers use the Tuya wire encoding: 1 signed byte
-    // per register, scale ÷2 (so raw 30 = 15.0 °C). Verified empirically
-    // against a known 15 °C water-tank reading. The Arctic V1.3 PDF
-    // describes 16-bit Modbus values, but the actual wire format is
-    // 8-bit packed.
+    // Temperature registers tentatively use the Tuya wire encoding: 1 signed
+    // byte per register, scale ÷2 (so raw 30 = 15.0 °C). NOTE: the ÷2 scale
+    // is a working hypothesis based on a single anecdotal data point ("water
+    // tank should be ~15 °C" + raw byte = 30) plus indoor/outdoor ambient
+    // values that "look reasonable" — it has NOT been validated against an
+    // independent thermometer. The Arctic V1.3 PDF documents these as 16-bit
+    // Modbus values; the wire format is clearly 8-bit truncated, but whether
+    // the true scale is ÷2, ÷10, or register-specific is unverified. Needs
+    // on-site testing before treating these readings as accurate.
     { 2100, { "Water Tank Temp",        "°C",    0.5f, true  } },
     { 2102, { "Outlet Water Temp",      "°C",    0.5f, true  } },
     { 2103, { "Inlet Water Temp",       "°C",    0.5f, true  } },

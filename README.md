@@ -113,11 +113,12 @@ Pump → controller (response):
        └─ dir = 0x0F (response)
 ```
 
-Decoded with `÷2` scale (verified against a known 15 °C water tank reading):
+Tentatively decoded with `÷2` scale (**working hypothesis only** — see
+"Open questions" below):
 
 ```
 byte  reg   name                value
-  7   2100  Water Tank Temp     30 ÷ 2 = 15.0 °C   ← matches reality
+  7   2100  Water Tank Temp     30 ÷ 2 = 15.0 °C
   9   2102  Outlet Water Temp   raw  6 ÷ 2 =  3.0 °C
  10   2103  Inlet Water Temp    raw  9 ÷ 2 =  4.5 °C
  16   2109  Indoor Ambient      raw 30 ÷ 2 = 15.0 °C
@@ -126,6 +127,16 @@ byte  reg   name                value
 
 ### Open questions
 
+- **Temperature scale (÷2) is a guess, not a confirmed measurement.**
+  It's based on a single anecdotal data point ("water tank should be
+  around 15 °C" + raw byte = 30 → 30 ÷ 2 = 15) plus indoor/outdoor
+  ambient readings that "look reasonable" for the day of capture. It
+  has not been compared against an independent thermometer reading,
+  and the Arctic V1.3 PDF documents these as 16-bit Modbus values
+  (the wire format is clearly 8-bit truncated, but whether the scale
+  is truly ÷2, ÷10, or something register-specific is unverified).
+  Needs on-site testing with a known-temperature reference before any
+  of these values should be treated as accurate.
 - **Static 7-byte prefix in the telemetry block** — looks like device-info or
   a Tuya-style DataPoint header (`0a 28 32 05 01 00 0f`), but the exact
   encoding is undecoded.
