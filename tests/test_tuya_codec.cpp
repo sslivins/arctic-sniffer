@@ -152,8 +152,8 @@ void test_parse_response_real_capture()
     CHECK(pf.frame_len == 67);
     // First payload byte mirrors header offset 8 of the captured frame (0x00).
     CHECK(pf.payload[0] == 0x00);
-    // Last payload byte mirrors header offset 65 of the captured frame (0xf8).
-    CHECK(pf.payload[57] == 0xF8);
+    // Last payload byte is at buffer offset 65 (0x08); 0xF8 is the chk byte.
+    CHECK(pf.payload[57] == 0x08);
 }
 
 void test_parse_response_telemetry_window()
