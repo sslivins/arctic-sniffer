@@ -1,6 +1,7 @@
 #include "modbus_sniffer.h"
 #include "arctic_registers.h"
 #include "recorder.h"
+#include "tuya_codec.h"
 
 #include <cstring>
 #include <atomic>
@@ -18,71 +19,15 @@ static const char *TAG = "sniffer";
 namespace sniffer {
 
 // ---------------------------------------------------------------------------
-// Tuya-framed Arctic protocol
-//
-// What's actually on the wire (NOT the V1.3 PDF's plain Modbus RTU):
-//
-//   55 AA <dir:1> <fc:1> <addr:2BE> <count:2BE> [data:count bytes] <chk:1>
-//
-//   dir   : 0xF0 = controller -> heat pump (request)
-//           0x0F = heat pump -> controller (response)
-//   fc    : 0x03 = read register block (only FC observed)
-//   addr  : starting BYTE offset into the unified register page
-//   count : number of bytes to read (response data length)
-//   chk   : 1 byte; chk = (0xFF - sum(bytes_after_55AA_through_byte_before_chk)) & 0xFF
-//           equivalently: ~sum & 0xFF (one's complement of sum), Tuya MCU style.
-//
-// Total length:
-//   Request  = 9 bytes (no data field, just the query header + chk)
-//   Response = 9 + count bytes (header + count data bytes + chk)
-//
-// Two polls are observed in rotation:
-//   A=0  B=50 -> "telemetry" (input regs 2100+; bytes 0..6 are a static
-//                7-byte prefix `0a 28 32 05 01 00 0f`, then byte 7 = reg
-//                2100, byte 8 = reg 2101, etc.)
-//   A=50 B=58 -> "holding"   (regs 2000..2057, byte 0 = reg 2000, no prefix)
-//
-// Registers are packed 1 byte each (NOT 2 bytes like classic Modbus).
-// Apply per-register scale from arctic_registers.cpp; signed registers
-// must be sign-extended from int8 -> int16 before storing in
-// Transaction::values so to_signed() in arctic_registers.h decodes them
-// correctly.
+// Tuya-framed Arctic protocol — wire format constants and codec live in
+// tuya_codec.{h,cpp}. This file is the sniffer integration: UART driver,
+// streaming reassembly, and request/response pairing.
 // ---------------------------------------------------------------------------
 
-constexpr size_t  MAX_FRAME    = 256;
 constexpr size_t  MAX_BLOB     = 512;   // max bytes in one UART batch
 constexpr int     UART_BUF_SZ  = 1024;
 constexpr int     UART_QUEUE_SZ = 20;
 constexpr uint8_t RX_TOUT_THRESH = 40;  // hardware TOUT in bit-times
-
-// Frame structure constants
-constexpr uint8_t  TUYA_HDR0   = 0x55;
-constexpr uint8_t  TUYA_HDR1   = 0xAA;
-constexpr uint8_t  DIR_REQUEST  = 0xF0;
-constexpr uint8_t  DIR_RESPONSE = 0x0F;
-constexpr uint8_t  FC_READ      = 0x03;
-constexpr size_t   TUYA_HDR_LEN = 8;   // 55 AA dir fc addr:2 count:2
-constexpr size_t   CHK_LEN      = 1;
-
-// Known register windows (fieldA -> Arctic register base, prefix length)
-struct RegWindow {
-    uint16_t field_a;
-    uint16_t field_b;     // expected B for this window
-    uint16_t reg_base;    // first Arctic register number
-    uint8_t  prefix_len;  // bytes at start of response data to skip
-};
-static constexpr RegWindow KNOWN_WINDOWS[] = {
-    { 0,  50, 2100, 7 },  // telemetry (input regs)
-    { 50, 58, 2000, 0 },  // holding regs
-};
-
-static const RegWindow *find_window(uint16_t a, uint16_t b)
-{
-    for (const auto &w : KNOWN_WINDOWS) {
-        if (w.field_a == a && w.field_b == b) return &w;
-    }
-    return nullptr;
-}
 
 // ---------------------------------------------------------------------------
 // State
@@ -109,39 +54,6 @@ static Transaction  s_pending;
 static uint16_t     s_pending_field_a = 0;
 static uint16_t     s_pending_field_b = 0;
 static int64_t      s_pending_uptime_ms = 0;
-
-// ---------------------------------------------------------------------------
-// Tuya frame helpers
-// ---------------------------------------------------------------------------
-
-/// Validate that `dir`, `fc`, and the (A,B) tuple match a known window.
-/// Without a checksum to verify against, this is our only structural defense
-/// against a corrupted `55 AA` byte pair starting a phantom frame.
-static bool header_sane(uint8_t dir, uint8_t fc, uint16_t a, uint16_t b)
-{
-    if (dir != DIR_REQUEST && dir != DIR_RESPONSE) return false;
-    if (fc  != FC_READ) return false;
-    return find_window(a, b) != nullptr;
-}
-
-/// Compute the total frame length (header + data + chk) given a peeked
-/// header. Returns 0 if more bytes are needed before we can decide,
-/// or a value > MAX_FRAME if the header is unreasonable.
-static size_t tuya_frame_len(uint8_t dir, uint16_t b)
-{
-    if (dir == DIR_REQUEST)  return TUYA_HDR_LEN + CHK_LEN;            // 9
-    if (dir == DIR_RESPONSE) return TUYA_HDR_LEN + b + CHK_LEN;        // 9+count
-    return 0;
-}
-
-/// Compute the Tuya-style 1-byte checksum over a complete frame.
-/// chk = (0xFF - sum(bytes_after_55AA_through_byte_before_chk)) & 0xFF
-static uint8_t compute_chk(const uint8_t *buf, size_t frame_len)
-{
-    uint32_t s = 0;
-    for (size_t i = 2; i + 1 < frame_len; ++i) s += buf[i];
-    return (uint8_t)((0xFF - (s & 0xFF)) & 0xFF);
-}
 
 // ---------------------------------------------------------------------------
 // Diagnostic hex dump
@@ -192,26 +104,21 @@ static uint16_t decode_byte(uint8_t raw, uint16_t reg_addr)
 /// Process a complete, structurally validated Tuya frame.
 static void process_frame(const uint8_t *buf, size_t len)
 {
-    // buf[0..1] = 55 AA (already verified)
-    uint8_t  dir = buf[2];
-    uint8_t  fc  = buf[3];
-    uint16_t a   = (uint16_t)(buf[4] << 8) | buf[5];
-    uint16_t b   = (uint16_t)(buf[6] << 8) | buf[7];
-
-    // Validate checksum
-    uint8_t chk_expected = compute_chk(buf, len);
-    uint8_t chk_actual   = buf[len - 1];
-    if (chk_expected != chk_actual) {
-        ESP_LOGW(TAG, "Bad chk dir=0x%02X A=%u B=%u expect=0x%02X got=0x%02X",
-                 dir, a, b, chk_expected, chk_actual);
+    tuya_codec::ParsedFrame pf{};
+    auto pr = tuya_codec::parse_frame(buf, len, pf);
+    if (pr != tuya_codec::ParseResult::OK) {
+        ESP_LOGW(TAG, "Frame parse failed: code=%d", (int)pr);
         s_crc_errors.fetch_add(1, std::memory_order_relaxed);
         return;
     }
 
-    const RegWindow *win = find_window(a, b);
-    if (!win) return;  // header_sane should have caught this
+    const uint8_t  dir = pf.dir;
+    const uint8_t  fc  = pf.fc;
+    const uint16_t a   = pf.field_a;
+    const uint16_t b   = pf.field_b;
+    const tuya_codec::RegWindow *win = pf.window;
 
-    if (dir == DIR_REQUEST) {
+    if (dir == tuya_codec::DIR_REQUEST) {
         // If a previous request is still pending, flush it as missed.
         if (s_have_pending) {
             ESP_LOGW(TAG, "Missed response for prev req A=%u B=%u",
@@ -246,8 +153,8 @@ static void process_frame(const uint8_t *buf, size_t len)
     }
 
     // Pull data bytes (skip prefix if any), unpack into Transaction.values[].
-    const uint8_t *data = buf + TUYA_HDR_LEN + win->prefix_len;
-    size_t data_bytes   = (size_t)b - win->prefix_len;
+    const uint8_t *data = pf.payload + win->prefix_len;
+    size_t data_bytes   = (size_t)pf.payload_len - win->prefix_len;
     if (data_bytes > MAX_REGS) data_bytes = MAX_REGS;
 
     Transaction txn = s_pending;
@@ -282,24 +189,13 @@ static void consume_front(size_t n)
 /// Returns offset, or s_blob_len if not found.
 static size_t find_frame_start()
 {
-    // Need at least 8 bytes (header) to validate sanity
-    if (s_blob_len < TUYA_HDR_LEN) return s_blob_len;
-    for (size_t i = 0; i + TUYA_HDR_LEN <= s_blob_len; ++i) {
-        if (s_blob_buf[i] != TUYA_HDR0) continue;
-        if (s_blob_buf[i + 1] != TUYA_HDR1) continue;
-        uint8_t  dir = s_blob_buf[i + 2];
-        uint8_t  fc  = s_blob_buf[i + 3];
-        uint16_t a   = (uint16_t)(s_blob_buf[i + 4] << 8) | s_blob_buf[i + 5];
-        uint16_t bb  = (uint16_t)(s_blob_buf[i + 6] << 8) | s_blob_buf[i + 7];
-        if (header_sane(dir, fc, a, bb)) return i;
-    }
-    return s_blob_len;
+    return tuya_codec::find_frame_start(s_blob_buf, s_blob_len);
 }
 
 static void try_extract_frames()
 {
     int iters = 0;
-    while (s_blob_len >= TUYA_HDR_LEN + CHK_LEN && iters++ < 32) {
+    while (s_blob_len >= tuya_codec::MIN_FRAME_LEN && iters++ < 32) {
         size_t start = find_frame_start();
         if (start == s_blob_len) {
             // No frame start found; drop everything except the last byte
@@ -322,9 +218,9 @@ static void try_extract_frames()
         // Valid header at offset 0. Compute frame length.
         uint8_t  dir = s_blob_buf[2];
         uint16_t bb  = (uint16_t)(s_blob_buf[6] << 8) | s_blob_buf[7];
-        size_t flen = tuya_frame_len(dir, bb);
-        if (flen == 0 || flen > MAX_FRAME) {
-            // Shouldn't happen given header_sane, but be defensive.
+        size_t flen = tuya_codec::frame_total_len(dir, bb);
+        if (flen == 0 || flen > tuya_codec::MAX_FRAME_LEN) {
+            // Shouldn't happen given find_frame_start did header validation.
             ESP_LOGW(TAG, "Insane frame len %u for dir=0x%02X B=%u",
                      (unsigned)flen, dir, bb);
             s_crc_errors.fetch_add(1, std::memory_order_relaxed);

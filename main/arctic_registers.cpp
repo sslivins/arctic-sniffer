@@ -54,15 +54,13 @@ static const RegEntry s_registers[] = {
     { 2057, { "Freq Control Setting",   "Hz",    1.0f, false } },
 
     // Input registers (read-only) — 2100–2138
-    // Temperature registers tentatively use the Tuya wire encoding: 1 signed
-    // byte per register, scale ÷2 (so raw 30 = 15.0 °C). NOTE: the ÷2 scale
-    // is a working hypothesis based on a single anecdotal data point ("water
-    // tank should be ~15 °C" + raw byte = 30) plus indoor/outdoor ambient
-    // values that "look reasonable" — it has NOT been validated against an
-    // independent thermometer. The Arctic V1.3 PDF documents these as 16-bit
-    // Modbus values; the wire format is clearly 8-bit truncated, but whether
-    // the true scale is ÷2, ÷10, or register-specific is unverified. Needs
-    // on-site testing before treating these readings as accurate.
+    // Temperature registers use the Tuya wire encoding: 1 signed byte per
+    // register, scale ÷2 (so raw 30 = 15.0 °C). Validated 2026-05-03 against
+    // on-site captures: reg 2110 (Outdoor Ambient) read raw 20 → 10 °C, which
+    // matches observed outdoor temperature (5–10 °C range). Setpoint /
+    // holding regs above (2000–2057) intentionally remain scale=1.0 — raw 45
+    // and 55 at regs 2003/2004 decode to a sensible 45 °C floor-heat target
+    // and 55 °C DHW target. Sensor temps ÷2, config/setpoint temps raw.
     { 2100, { "Water Tank Temp",        "°C",    0.5f, true  } },
     { 2102, { "Outlet Water Temp",      "°C",    0.5f, true  } },
     { 2103, { "Inlet Water Temp",       "°C",    0.5f, true  } },

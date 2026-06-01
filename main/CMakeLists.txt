@@ -15,6 +15,7 @@ execute_process(
 idf_component_register(
     SRCS "main.cpp"
          "modbus_sniffer.cpp"
+         "tuya_codec.cpp"
          "arctic_registers.cpp"
          "recorder.cpp"
          "api_server.cpp"
