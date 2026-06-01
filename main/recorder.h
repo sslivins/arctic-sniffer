@@ -35,6 +35,12 @@ void set_auto_stop_callback(std::function<void()> cb);
 /// Thread-safe.  Auto-stops recording if the buffer is full.
 void add(const sniffer::Transaction &txn);
 
+/// Add a raw-byte burst to the recording buffer with a timestamp.
+/// Emits a JSONL line of the form: {"t":<ms>,"raw":"<hex>"}
+/// Used to capture the wire as-is, regardless of Modbus framing.
+/// Thread-safe.  Auto-stops recording if the buffer is full.
+void add_raw(const uint8_t *data, size_t len, int64_t timestamp_ms);
+
 /// Format a transaction as a JSONL line into the provided buffer.
 /// Returns the number of bytes written.  Used by both in-memory
 /// recording and web streaming.

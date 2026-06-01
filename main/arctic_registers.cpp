@@ -54,22 +54,29 @@ static const RegEntry s_registers[] = {
     { 2057, { "Freq Control Setting",   "Hz",    1.0f, false } },
 
     // Input registers (read-only) — 2100–2138
-    { 2100, { "Water Tank Temp",        "°C",    1.0f, true  } },
-    { 2102, { "Outlet Water Temp",      "°C",    1.0f, true  } },
-    { 2103, { "Inlet Water Temp",       "°C",    1.0f, true  } },
-    { 2104, { "Discharge Temp",         "°C",    1.0f, true  } },
-    { 2105, { "Suction Temp",           "°C",    1.0f, true  } },
-    { 2106, { "EVI Suction Temp",       "°C",    1.0f, true  } },
-    { 2107, { "Outdoor Coil Temp",      "°C",    1.0f, true  } },
-    { 2108, { "Indoor Coil Temp",       "°C",    1.0f, true  } },
-    { 2109, { "Indoor Ambient Temp",    "°C",    1.0f, true  } },
-    { 2110, { "Outdoor Ambient Temp",   "°C",    1.0f, true  } },
-    { 2111, { "HP Saturation Temp",     "°C",    1.0f, true  } },
-    { 2112, { "LP Saturation Temp",     "°C",    1.0f, true  } },
-    { 2113, { "EVI LP Sat Temp",        "°C",    1.0f, true  } },
-    { 2114, { "IPM Temp",               "°C",    1.0f, true  } },
-    { 2115, { "Brine Inlet Temp",       "°C",    1.0f, true  } },
-    { 2116, { "Brine Outlet Temp",      "°C",    1.0f, true  } },
+    // Temperature registers use the Tuya wire encoding: 1 signed byte per
+    // register, scale ÷2 (so raw 30 = 15.0 °C). Validated 2026-05-03 against
+    // on-site captures: reg 2110 (Outdoor Ambient) read raw 20 → 10 °C, which
+    // matches observed outdoor temperature (5–10 °C range). Setpoint /
+    // holding regs above (2000–2057) intentionally remain scale=1.0 — raw 45
+    // and 55 at regs 2003/2004 decode to a sensible 45 °C floor-heat target
+    // and 55 °C DHW target. Sensor temps ÷2, config/setpoint temps raw.
+    { 2100, { "Water Tank Temp",        "°C",    0.5f, true  } },
+    { 2102, { "Outlet Water Temp",      "°C",    0.5f, true  } },
+    { 2103, { "Inlet Water Temp",       "°C",    0.5f, true  } },
+    { 2104, { "Discharge Temp",         "°C",    0.5f, true  } },
+    { 2105, { "Suction Temp",           "°C",    0.5f, true  } },
+    { 2106, { "EVI Suction Temp",       "°C",    0.5f, true  } },
+    { 2107, { "Outdoor Coil Temp",      "°C",    0.5f, true  } },
+    { 2108, { "Indoor Coil Temp",       "°C",    0.5f, true  } },
+    { 2109, { "Indoor Ambient Temp",    "°C",    0.5f, true  } },
+    { 2110, { "Outdoor Ambient Temp",   "°C",    0.5f, true  } },
+    { 2111, { "HP Saturation Temp",     "°C",    0.5f, true  } },
+    { 2112, { "LP Saturation Temp",     "°C",    0.5f, true  } },
+    { 2113, { "EVI LP Sat Temp",        "°C",    0.5f, true  } },
+    { 2114, { "IPM Temp",               "°C",    0.5f, true  } },
+    { 2115, { "Brine Inlet Temp",       "°C",    0.5f, true  } },
+    { 2116, { "Brine Outlet Temp",      "°C",    0.5f, true  } },
     { 2118, { "Compressor Freq",        "Hz",    1.0f, false } },
     { 2119, { "Fan Speed",              "RPM",   1.0f, false } },
     { 2120, { "AC Voltage",             "V",     1.0f, false } },

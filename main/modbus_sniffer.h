@@ -41,4 +41,34 @@ uint32_t get_crc_errors();
 /// Return total transactions (paired req+resp) since init.
 uint32_t get_transaction_count();
 
+/// Get current baud rate.
+uint32_t get_baud_rate();
+
+/// Change baud rate at runtime. Returns true on success.
+bool set_baud_rate(uint32_t baud);
+
+/// Reset error/frame counters.
+void reset_stats();
+
+/// Get RX signal inversion state.
+bool get_rx_inverted();
+
+/// Set RX signal inversion (for swapped A/B wires). Returns true on success.
+bool set_rx_inverted(bool inverted);
+
+/// Parity options
+enum class Parity { NONE, EVEN, ODD };
+
+/// Get current parity setting.
+Parity get_parity();
+
+/// Set parity. Returns true on success.
+bool set_parity(Parity p);
+
+/// Get current stop bits (1 or 2).
+int get_stop_bits();
+
+/// Set stop bits (1 or 2). Returns true on success.
+bool set_stop_bits(int bits);
+
 }  // namespace sniffer

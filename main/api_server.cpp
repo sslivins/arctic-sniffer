@@ -150,13 +150,14 @@ static esp_err_t handle_status(httpd_req_t *req)
 
     char buf[512];
     int len = snprintf(buf, sizeof(buf),
-        "{\"version\":\"%s\",\"ip\":\"%s\",\"frames\":%lu,\"crc_errors\":%lu,"
+        "{\"version\":\"%s\",\"ip\":\"%s\",\"baud\":%lu,\"frames\":%lu,\"crc_errors\":%lu,"
         "\"transactions\":%lu,\"recording\":%s,"
         "\"rec_entries\":%lu,"
         "\"rec_available\":%s,"
         "\"ws_clients\":%u}",
         app->version,
         wifi::get_ip(),
+        (unsigned long)sniffer::get_baud_rate(),
         (unsigned long)sniffer::get_frame_count(),
         (unsigned long)sniffer::get_crc_errors(),
         (unsigned long)sniffer::get_transaction_count(),
@@ -198,6 +199,150 @@ static esp_err_t handle_log(httpd_req_t *req)
     }
     httpd_resp_sendstr_chunk(req, "]");
     return httpd_resp_send_chunk(req, nullptr, 0);
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/baud — get current baud rate
+// POST /api/baud — set baud rate {"baud": 9600}
+// ---------------------------------------------------------------------------
+
+static esp_err_t handle_baud(httpd_req_t *req)
+{
+    set_cors(req);
+    httpd_resp_set_type(req, "application/json");
+
+    if (req->method == HTTP_GET) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "{\"baud\":%lu}",
+                 (unsigned long)sniffer::get_baud_rate());
+        return httpd_resp_sendstr(req, buf);
+    }
+
+    // POST — parse JSON body
+    char body[64] = {0};
+    int received = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (received <= 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        return httpd_resp_sendstr(req, "{\"error\":\"No body\"}");
+    }
+
+    // Simple JSON parse for {"baud": NNNN}
+    uint32_t baud = 0;
+    const char *p = strstr(body, "\"baud\"");
+    if (p) {
+        p = strchr(p, ':');
+        if (p) baud = (uint32_t)atoi(p + 1);
+    }
+
+    if (baud == 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        return httpd_resp_sendstr(req, "{\"error\":\"Invalid baud value\"}");
+    }
+
+    if (!sniffer::set_baud_rate(baud)) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        char buf[128];
+        snprintf(buf, sizeof(buf),
+                 "{\"error\":\"Unsupported baud rate: %lu\"}",
+                 (unsigned long)baud);
+        return httpd_resp_sendstr(req, buf);
+    }
+
+    char buf[64];
+    snprintf(buf, sizeof(buf), "{\"baud\":%lu,\"status\":\"ok\"}",
+             (unsigned long)baud);
+    return httpd_resp_sendstr(req, buf);
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/config — get all UART config
+// POST /api/config — set config {"invert_rx": true, "parity": "even"}
+// ---------------------------------------------------------------------------
+
+static esp_err_t handle_config(httpd_req_t *req)
+{
+    set_cors(req);
+    httpd_resp_set_type(req, "application/json");
+
+    if (req->method == HTTP_GET) {
+        const char *parity_str;
+        switch (sniffer::get_parity()) {
+            case sniffer::Parity::EVEN: parity_str = "even"; break;
+            case sniffer::Parity::ODD:  parity_str = "odd";  break;
+            default:                    parity_str = "none"; break;
+        }
+        char buf[160];
+        snprintf(buf, sizeof(buf),
+                 "{\"baud\":%lu,\"invert_rx\":%s,\"parity\":\"%s\",\"stop_bits\":%d}",
+                 (unsigned long)sniffer::get_baud_rate(),
+                 sniffer::get_rx_inverted() ? "true" : "false",
+                 parity_str,
+                 sniffer::get_stop_bits());
+        return httpd_resp_sendstr(req, buf);
+    }
+
+    // POST — parse JSON body
+    char body[128] = {0};
+    int received = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (received <= 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        return httpd_resp_sendstr(req, "{\"error\":\"No body\"}");
+    }
+
+    // Parse invert_rx
+    const char *inv = strstr(body, "\"invert_rx\"");
+    if (inv) {
+        bool invert = (strstr(inv, "true") != nullptr);
+        sniffer::set_rx_inverted(invert);
+    }
+
+    // Parse parity
+    const char *par = strstr(body, "\"parity\"");
+    if (par) {
+        if (strstr(par, "\"even\"")) {
+            sniffer::set_parity(sniffer::Parity::EVEN);
+        } else if (strstr(par, "\"odd\"")) {
+            sniffer::set_parity(sniffer::Parity::ODD);
+        } else if (strstr(par, "\"none\"")) {
+            sniffer::set_parity(sniffer::Parity::NONE);
+        }
+    }
+
+    // Parse baud
+    const char *bp = strstr(body, "\"baud\"");
+    if (bp) {
+        bp = strchr(bp, ':');
+        if (bp) {
+            uint32_t baud = (uint32_t)atoi(bp + 1);
+            if (baud > 0) sniffer::set_baud_rate(baud);
+        }
+    }
+
+    // Parse stop_bits
+    const char *sb = strstr(body, "\"stop_bits\"");
+    if (sb) {
+        sb = strchr(sb, ':');
+        if (sb) {
+            int bits = atoi(sb + 1);
+            if (bits == 1 || bits == 2) sniffer::set_stop_bits(bits);
+        }
+    }
+
+    // Return current config
+    const char *parity_str;
+    switch (sniffer::get_parity()) {
+        case sniffer::Parity::EVEN: parity_str = "even"; break;
+        case sniffer::Parity::ODD:  parity_str = "odd";  break;
+        default:                    parity_str = "none"; break;
+    }
+    char buf[160];
+    snprintf(buf, sizeof(buf),
+             "{\"baud\":%lu,\"invert_rx\":%s,\"parity\":\"%s\",\"stop_bits\":%d,\"status\":\"ok\"}",
+             (unsigned long)sniffer::get_baud_rate(),
+             sniffer::get_rx_inverted() ? "true" : "false",
+             parity_str,
+             sniffer::get_stop_bits());
+    return httpd_resp_sendstr(req, buf);
 }
 
 // ---------------------------------------------------------------------------
@@ -336,6 +481,10 @@ esp_err_t init()
         { "/",                   HTTP_GET,    handle_root,            nullptr },
         { "/api/status",         HTTP_GET,    handle_status,          nullptr },
         { "/api/log",            HTTP_GET,    handle_log,             nullptr },
+        { "/api/baud",           HTTP_GET,    handle_baud,            nullptr },
+        { "/api/baud",           HTTP_POST,   handle_baud,            nullptr },
+        { "/api/config",         HTTP_GET,    handle_config,          nullptr },
+        { "/api/config",         HTTP_POST,   handle_config,          nullptr },
         { "/api/record/start",   HTTP_POST,   handle_record_start,    nullptr },
         { "/api/record/stop",    HTTP_POST,   handle_record_stop,     nullptr },
         { "/api/record/download",HTTP_GET,    handle_record_download, nullptr },
