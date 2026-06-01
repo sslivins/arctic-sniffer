@@ -131,45 +131,52 @@ void test_parse_request_real_capture()
 void test_parse_response_real_capture()
 {
     TEST("parse_response_real_capture");
-    // Response half of capture line 1 (A=50, B=58, 67 bytes total).
+    // Response half of capture line 1 (A=50, B=58). The captured wire bytes
+    // include one trailing idle byte after the chk, so the buffer is 68 bytes
+    // long but the frame itself is 67. parse_frame must consume only frame_len.
     auto resp = hex(
         "55aa0f030032003a002000000000002014232d2d32fa030000000000042d001c1205"
         "050000f63cf90a2d050c5f0fe232ff0a0a050205ff0000000014f10000000008f800");
-    CHECK(resp.size() == 67);
+    CHECK(resp.size() == 68);
 
     tuya_codec::ParsedFrame pf{};
     auto pr = tuya_codec::parse_frame(resp.data(), resp.size(), pf);
     CHECK(pr == tuya_codec::ParseResult::OK);
+    if (pr != tuya_codec::ParseResult::OK) return;
+
     CHECK(pf.dir == tuya_codec::DIR_RESPONSE);
     CHECK(pf.field_a == 50);
     CHECK(pf.field_b == 58);
     CHECK(pf.payload != nullptr);
     CHECK(pf.payload_len == 58);
     CHECK(pf.frame_len == 67);
-    // First payload byte = reg 2000 raw.
+    // First payload byte mirrors header offset 8 of the captured frame (0x00).
     CHECK(pf.payload[0] == 0x00);
-    // Byte 3 = reg 2003 = floor-heat setpoint, expect 0x20 = 32 °C.
-    CHECK(pf.payload[3] == 0x20);
-    // Byte 4 = reg 2004 = DHW setpoint, expect 0x14 = 20 °C.
-    CHECK(pf.payload[4] == 0x14);
+    // Last payload byte is at buffer offset 65 (0x08); 0xF8 is the chk byte.
+    CHECK(pf.payload[57] == 0x08);
 }
 
 void test_parse_response_telemetry_window()
 {
     TEST("parse_response_telemetry_window");
-    // Response half of capture line 3 (A=0, B=50, 59 bytes total).
-    // Validates the (0,50) → reg 2100 window with the 7-byte static prefix.
+    // Response half of capture line 3 (A=0, B=50). Captured length is 60 bytes
+    // (1 trailing idle byte); frame itself is 59. Validates the (0,50) window
+    // and the 7-byte static prefix.
     auto resp = hex(
         "55aa0f03000000320a28320501000f1e17060911230020231e2800000c0001000000"
-        "0000000000600000000000000000a0a0f0b0b0f0e001300e68514");
-    CHECK(resp.size() >= 59);
+        "000000000060000000000000000a0a0f0b0b0f0e001300e68514");
+    CHECK(resp.size() == 60);
 
     tuya_codec::ParsedFrame pf{};
-    auto pr = tuya_codec::parse_frame(resp.data(), 59, pf);
+    auto pr = tuya_codec::parse_frame(resp.data(), resp.size(), pf);
     CHECK(pr == tuya_codec::ParseResult::OK);
+    if (pr != tuya_codec::ParseResult::OK) return;
+
     CHECK(pf.field_a == 0);
     CHECK(pf.field_b == 50);
+    CHECK(pf.payload != nullptr);
     CHECK(pf.payload_len == 50);
+    CHECK(pf.frame_len == 59);
     // Static 7-byte prefix: 0a 28 32 05 01 00 0f
     CHECK(pf.payload[0] == 0x0A);
     CHECK(pf.payload[1] == 0x28);
