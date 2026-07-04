@@ -56,6 +56,41 @@ static uint16_t     s_pending_field_b = 0;
 static int64_t      s_pending_uptime_ms = 0;
 
 // ---------------------------------------------------------------------------
+// Reverse-engineering aids: raw register snapshot + fc=0x06 command ring
+// ---------------------------------------------------------------------------
+
+// Raw (undecoded) latest byte per register. Covers 2000..2199 which spans
+// both the holding (2000..2057) and telemetry (2100..2142) windows.
+constexpr uint16_t SNAP_BASE = 2000;
+constexpr uint16_t SNAP_SPAN = 200;
+static uint8_t  s_snap_raw[SNAP_SPAN]   = {0};
+static bool     s_snap_valid[SNAP_SPAN] = {false};
+
+static CommandRec s_cmd_ring[COMMAND_RING_SZ];
+static std::atomic<uint32_t> s_cmd_count{0};   // total fc=0x06 frames seen
+
+static int64_t now_ms();  // defined below
+
+static void snapshot_store(uint16_t addr, uint8_t raw)
+{
+    if (addr < SNAP_BASE) return;
+    uint16_t idx = (uint16_t)(addr - SNAP_BASE);
+    if (idx >= SNAP_SPAN) return;
+    s_snap_raw[idx]   = raw;
+    s_snap_valid[idx] = true;
+}
+
+static void record_command(uint8_t dir, uint16_t selector, uint16_t value)
+{
+    uint32_t n = s_cmd_count.fetch_add(1, std::memory_order_relaxed);
+    CommandRec &rec = s_cmd_ring[n % COMMAND_RING_SZ];
+    rec.timestamp_ms = now_ms();
+    rec.dir          = dir;
+    rec.selector     = selector;
+    rec.value        = value;
+}
+
+// ---------------------------------------------------------------------------
 // Diagnostic hex dump
 // ---------------------------------------------------------------------------
 
@@ -118,6 +153,14 @@ static void process_frame(const uint8_t *buf, size_t len)
     const uint16_t b   = pf.field_b;
     const tuya_codec::RegWindow *win = pf.window;
 
+    // fc=0x06 command frame (power/mode/setpoint). No register window; the
+    // (a,b) pair is a command selector/value. Record it and return — do NOT
+    // run it through the read request/response pairing below.
+    if (fc == tuya_codec::FC_CMD) {
+        record_command(dir, a, b);
+        return;
+    }
+
     if (dir == tuya_codec::DIR_REQUEST) {
         // If a previous request is still pending, flush it as missed.
         if (s_have_pending) {
@@ -163,6 +206,7 @@ static void process_frame(const uint8_t *buf, size_t len)
     for (size_t i = 0; i < data_bytes; ++i) {
         uint16_t addr = (uint16_t)(win->reg_base + i);
         txn.values[i] = decode_byte(data[i], addr);
+        snapshot_store(addr, data[i]);   // raw byte for OFF/ON diffing
     }
     txn.reg_count = (uint16_t)data_bytes;
 
@@ -217,8 +261,11 @@ static void try_extract_frames()
 
         // Valid header at offset 0. Compute frame length.
         uint8_t  dir = s_blob_buf[2];
+        uint8_t  fc  = s_blob_buf[3];
         uint16_t bb  = (uint16_t)(s_blob_buf[6] << 8) | s_blob_buf[7];
-        size_t flen = tuya_codec::frame_total_len(dir, bb);
+        size_t flen = (fc == tuya_codec::FC_CMD)
+                          ? (tuya_codec::HDR_LEN + tuya_codec::CHK_LEN)  // fixed 9
+                          : tuya_codec::frame_total_len(dir, bb);
         if (flen == 0 || flen > tuya_codec::MAX_FRAME_LEN) {
             // Shouldn't happen given find_frame_start did header validation.
             ESP_LOGW(TAG, "Insane frame len %u for dir=0x%02X B=%u",
@@ -443,6 +490,49 @@ void reset_stats()
     s_frame_count.store(0, std::memory_order_relaxed);
     s_crc_errors.store(0, std::memory_order_relaxed);
     s_txn_count.store(0, std::memory_order_relaxed);
+}
+
+// ---------------------------------------------------------------------------
+// Reverse-engineering aids: getters
+// ---------------------------------------------------------------------------
+
+uint32_t get_command_count()
+{
+    return s_cmd_count.load(std::memory_order_relaxed);
+}
+
+size_t get_recent_commands(CommandRec *out, size_t max)
+{
+    if (!out || max == 0) return 0;
+    uint32_t total = s_cmd_count.load(std::memory_order_relaxed);
+    size_t   have  = (total < COMMAND_RING_SZ) ? total : COMMAND_RING_SZ;
+    if (have > max) have = max;
+    // Emit oldest-first among the retained window.
+    uint32_t start = total - (uint32_t)have;
+    for (size_t i = 0; i < have; ++i) {
+        out[i] = s_cmd_ring[(start + i) % COMMAND_RING_SZ];
+    }
+    return have;
+}
+
+size_t get_register_snapshot(RegisterSample *out, size_t max)
+{
+    if (!out || max == 0) return 0;
+    size_t n = 0;
+    for (uint16_t i = 0; i < SNAP_SPAN && n < max; ++i) {
+        if (!s_snap_valid[i]) continue;
+        out[n].addr = (uint16_t)(SNAP_BASE + i);
+        out[n].raw  = s_snap_raw[i];
+        ++n;
+    }
+    return n;
+}
+
+void clear_snapshot()
+{
+    memset(s_snap_raw, 0, sizeof(s_snap_raw));
+    memset(s_snap_valid, 0, sizeof(s_snap_valid));
+    s_cmd_count.store(0, std::memory_order_relaxed);
 }
 
 bool get_rx_inverted() { return s_rx_inverted.load(std::memory_order_relaxed); }

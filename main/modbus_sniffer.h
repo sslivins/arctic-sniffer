@@ -27,6 +27,42 @@ struct Transaction {
 /// Callback type for completed transactions
 using TransactionCallback = std::function<void(const Transaction &txn)>;
 
+// ---------------------------------------------------------------------------
+// Reverse-engineering aids: raw register snapshot + fc=0x06 command capture
+// ---------------------------------------------------------------------------
+
+/// A captured controller command frame (fc=0x06). On the real bus the
+/// controller sends dir=0xF0 (controller -> unit); the unit may echo dir=0x0F.
+struct CommandRec {
+    int64_t  timestamp_ms;   // when captured
+    uint8_t  dir;            // 0xF0 controller->unit, 0x0F unit->controller
+    uint16_t selector;       // wire field_a (command selector, e.g. 0xFFFF)
+    uint16_t value;          // wire field_b (command value, e.g. 0x0001 = ON)
+};
+
+constexpr size_t COMMAND_RING_SZ = 32;
+
+/// One register's latest raw (undecoded) byte as seen on the wire.
+struct RegisterSample {
+    uint16_t addr;   // Arctic register number (2000.. or 2100..)
+    uint8_t  raw;    // raw byte value on the wire
+};
+
+/// Copy up to `max` most-recent captured command frames (newest last) into
+/// `out`. Returns the number written.
+size_t get_recent_commands(CommandRec *out, size_t max);
+
+/// Total fc=0x06 command frames seen since init/clear.
+uint32_t get_command_count();
+
+/// Copy the latest raw snapshot of every register seen so far into `out`
+/// (ascending address). Returns the number written (<= max).
+size_t get_register_snapshot(RegisterSample *out, size_t max);
+
+/// Clear the raw register snapshot and command ring (for a clean OFF/ON
+/// baseline before capturing).
+void clear_snapshot();
+
 /// Initialize the UART-based Modbus sniffer.  Starts a FreeRTOS task that
 /// continuously reads bytes, detects frame boundaries, parses Modbus RTU
 /// frames, and pairs master requests with slave responses.

@@ -58,6 +58,7 @@ constexpr uint8_t HDR1          = 0xAA;
 constexpr uint8_t DIR_REQUEST   = 0xF0;
 constexpr uint8_t DIR_RESPONSE  = 0x0F;
 constexpr uint8_t FC_READ       = 0x03;
+constexpr uint8_t FC_CMD        = 0x06;  // controller command (power/mode/setpoint)
 
 constexpr size_t  HDR_LEN       = 8;    // 55 AA dir fc addr:2 count:2
 constexpr size_t  CHK_LEN       = 1;

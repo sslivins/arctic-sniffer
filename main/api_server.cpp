@@ -202,6 +202,75 @@ static esp_err_t handle_log(httpd_req_t *req)
 }
 
 // ---------------------------------------------------------------------------
+// GET /api/registers — latest RAW byte of every register seen on the wire.
+// Undecoded (no scaling/sign) so OFF vs ON snapshots can be diffed exactly.
+// ---------------------------------------------------------------------------
+
+static esp_err_t handle_registers(httpd_req_t *req)
+{
+    set_cors(req);
+    httpd_resp_set_type(req, "application/json");
+
+    static sniffer::RegisterSample samples[sniffer::MAX_REGS * 4];
+    size_t n = sniffer::get_register_snapshot(samples, sizeof(samples) / sizeof(samples[0]));
+
+    httpd_resp_sendstr_chunk(req, "{");
+    char buf[48];
+    for (size_t i = 0; i < n; ++i) {
+        snprintf(buf, sizeof(buf), "%s\"%u\":%u",
+                 (i == 0) ? "" : ",", samples[i].addr, samples[i].raw);
+        httpd_resp_sendstr_chunk(req, buf);
+    }
+    httpd_resp_sendstr_chunk(req, "}");
+    return httpd_resp_send_chunk(req, nullptr, 0);
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/commands — recent fc=0x06 controller command frames (power/mode/
+// setpoint). dir 0xF0 = controller->unit, 0x0F = unit->controller echo.
+// ---------------------------------------------------------------------------
+
+static esp_err_t handle_commands(httpd_req_t *req)
+{
+    set_cors(req);
+    httpd_resp_set_type(req, "application/json");
+
+    static sniffer::CommandRec cmds[sniffer::COMMAND_RING_SZ];
+    size_t n = sniffer::get_recent_commands(cmds, sniffer::COMMAND_RING_SZ);
+
+    char head[64];
+    snprintf(head, sizeof(head), "{\"total\":%lu,\"commands\":[",
+             (unsigned long)sniffer::get_command_count());
+    httpd_resp_sendstr_chunk(req, head);
+
+    char buf[192];
+    for (size_t i = 0; i < n; ++i) {
+        snprintf(buf, sizeof(buf),
+                 "%s{\"dir\":\"0x%02X\",\"selector\":\"0x%04X\",\"value\":\"0x%04X\","
+                 "\"value_dec\":%u,\"frame\":\"55AA%02X06%04X%04X\"}",
+                 (i == 0) ? "" : ",",
+                 cmds[i].dir, cmds[i].selector, cmds[i].value, cmds[i].value,
+                 cmds[i].dir, cmds[i].selector, cmds[i].value);
+        httpd_resp_sendstr_chunk(req, buf);
+    }
+    httpd_resp_sendstr_chunk(req, "]}");
+    return httpd_resp_send_chunk(req, nullptr, 0);
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/snapshot/clear — reset the raw register snapshot + command ring
+// so the next capture starts from a clean baseline.
+// ---------------------------------------------------------------------------
+
+static esp_err_t handle_snapshot_clear(httpd_req_t *req)
+{
+    set_cors(req);
+    httpd_resp_set_type(req, "application/json");
+    sniffer::clear_snapshot();
+    return httpd_resp_sendstr(req, "{\"status\":\"cleared\"}");
+}
+
+// ---------------------------------------------------------------------------
 // GET /api/baud — get current baud rate
 // POST /api/baud — set baud rate {"baud": 9600}
 // ---------------------------------------------------------------------------
@@ -481,6 +550,9 @@ esp_err_t init()
         { "/",                   HTTP_GET,    handle_root,            nullptr },
         { "/api/status",         HTTP_GET,    handle_status,          nullptr },
         { "/api/log",            HTTP_GET,    handle_log,             nullptr },
+        { "/api/registers",      HTTP_GET,    handle_registers,       nullptr },
+        { "/api/commands",       HTTP_GET,    handle_commands,        nullptr },
+        { "/api/snapshot/clear", HTTP_POST,   handle_snapshot_clear,  nullptr },
         { "/api/baud",           HTTP_GET,    handle_baud,            nullptr },
         { "/api/baud",           HTTP_POST,   handle_baud,            nullptr },
         { "/api/config",         HTTP_GET,    handle_config,          nullptr },
