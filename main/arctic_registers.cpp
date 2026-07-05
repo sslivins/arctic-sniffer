@@ -36,15 +36,18 @@ static const RegEntry s_registers[] = {
     { 2104, { "Main EEV",               "steps", 1.0f,   false } },  // A5
     { 2113, { "IPM Temp",               "°C",    1.0f,   true  } },  // A8
     { 2114, { "Real-time Power",        "W",     100.0f, false } },  // A9
-    { 2128, { "Fault",                  nullptr, 1.0f,   false } },  // bitfield
-    { 2129, { "Running Flag",           nullptr, 1.0f,   false } },
+    { 2125, { "Fault(SensorEE)",       nullptr, 1.0f,   false } },  // bitfield
+    { 2126, { "Fault(SensorComp)",     nullptr, 1.0f,   false } },  // bitfield
+    { 2127, { "Fault(Elec)",           nullptr, 1.0f,   false } },  // bitfield
+    { 2128, { "Fault(Refrig)",         nullptr, 1.0f,   false } },  // bitfield
+    { 2129, { "Icon Bits #2",          nullptr, 1.0f,   false } },  // bit1=defrost,bit4=fan
     { 2130, { "Status",                 nullptr, 1.0f,   false } },  // bit2=comp,bit3=pump
     { 2132, { "Outlet Water Temp",      "°C",    1.0f,   true  } },  // o3
     { 2133, { "Inlet Water Temp",       "°C",    1.0f,   true  } },  // o2
     { 2134, { "Outdoor Ambient Temp",   "°C",    1.0f,   true  } },  // o4
     { 2135, { "Cool Coil Temp",         "°C",    1.0f,   true  } },  // A6
-    { 2136, { "Suction Temp",           "°C",    1.0f,   true  } },  // A3
-    { 2137, { "Coil Temp",              "°C",    1.0f,   true  } },  // A2
+    { 2136, { "Coil Temp",              "°C",    1.0f,   true  } },  // A2
+    { 2137, { "Suction Temp",           "°C",    1.0f,   true  } },  // A3
     { 2138, { "Discharge Temp",         "°C",    1.0f,   true  } },  // A1
     { 2141, { "Compressor Freq",        "Hz",    1.0f,   false } },  // A14
 };
@@ -68,7 +71,9 @@ const RegisterInfo *register_lookup(uint16_t address)
 char *register_format_value(uint16_t address, uint16_t raw, char *buf, size_t buf_len)
 {
     // Bitfield registers decode to a list of active flags.
-    if (address == REG_FAULT || address == REG_STATUS_BYTE) {
+    if (address == REG_FAULT || address == REG_FAULT_ELEC ||
+        address == REG_FAULT_SENSOR_COMP || address == REG_FAULT_SENSOR_EE ||
+        address == REG_STATUS_BYTE) {
         register_format_bitmap(address, raw, buf, buf_len);
         return buf;
     }
@@ -116,12 +121,49 @@ static const BitDesc s_status_bits[] = {
     { 3, "WaterPump" },
 };
 
-// Fault register reg2128 (Macon) — protection/fault bitfield. Only bit7 has
-// been confirmed live (P01 water-flow, captured during a real flow fault).
-// The Macon bit ordering does NOT match the legacy Arctic error tables, so
-// unconfirmed bits are intentionally left unlabeled (they show as raw hex).
-static const BitDesc s_fault_bits[] = {
+// Fault registers (Macon) — four 8-bit protection/fault bitfields, all mapped
+// live 2026-07-05 one bit at a time against the OEM LCD + Smart Life app, then
+// cross-referenced to the official Arctic fault catalog. Labels are LCD:app,
+// falling back to the catalog code where the LCD is blank. Unused bits omitted.
+static const BitDesc s_fault_refrig_bits[] = {   // reg2128
+    { 0, "P06:LowPress" },
+    { 1, "P27:CoilOverheat" },
+    { 2, "PC:AmbientProt" },
+    { 3, "P10" },
+    { 4, "P30:Antifreeze" },
+    { 5, "E05:CoilSensor" },
     { 7, "P01:WaterFlow" },
+};
+
+static const BitDesc s_fault_elec_bits[] = {     // reg2127
+    { 1, "P19:ACCurrent" },
+    { 2, "r06:CompPhaseCurrent" },
+    { 3, "r10:ACVoltage" },
+    { 4, "r11:DCBusVoltage" },
+    { 5, "r05:IPMTemp" },
+    { 6, "P11:HighDischarge" },
+    { 7, "P02:HighPressure" },
+};
+
+static const BitDesc s_fault_sensor_comp_bits[] = {  // reg2126
+    { 0, "r02:CompStart" },
+    { 1, "E26:In/OutComm" },
+    { 2, "r01:IPMFault" },
+    { 4, "E01:DischargeSensor" },
+    { 5, "E09:SuctionSensor" },
+    { 6, "E05:CoilSensor" },
+    { 7, "E22:AmbientSensor" },
+};
+
+static const BitDesc s_fault_sensor_ee_bits[] = {    // reg2125
+    { 0, "E28:OutdoorEE" },
+    { 1, "E19:InletSensor" },
+    { 2, "E18:OutletSensor" },
+    { 3, "E13:CoolCoilSensor" },
+    { 4, "E03" },
+    { 5, "E28:IndoorEE" },
+    { 6, "E27:DriverComm" },
+    { 7, "E21:CtrlComm" },
 };
 
 static int format_bits(const BitDesc *descs, size_t n, uint16_t raw, char *buf, size_t buf_len)
@@ -141,6 +183,20 @@ static int format_bits(const BitDesc *descs, size_t n, uint16_t raw, char *buf, 
     return off;
 }
 
+// Decode a fault bitfield: named flags plus the raw byte so any undecoded bit
+// stays visible. descs/n select the per-register bit table.
+static int format_fault(const BitDesc *descs, size_t n, uint16_t raw, char *buf, size_t buf_len)
+{
+    if (raw == 0) {
+        return snprintf(buf, buf_len, "(none)");
+    }
+    int off = format_bits(descs, n, raw, buf, buf_len);
+    if ((size_t)off < buf_len - 1) {
+        off += snprintf(buf + off, buf_len - off, " (0x%02X)", raw & 0xFF);
+    }
+    return off;
+}
+
 int register_format_bitmap(uint16_t address, uint16_t raw, char *buf, size_t buf_len)
 {
     switch (address) {
@@ -148,19 +204,21 @@ int register_format_bitmap(uint16_t address, uint16_t raw, char *buf, size_t buf
             return format_bits(s_status_bits, sizeof(s_status_bits)/sizeof(s_status_bits[0]),
                                raw, buf, buf_len);
         case REG_FAULT:
-            // Show decoded flags plus the raw byte so undecoded fault bits
-            // remain visible for the ongoing fault-bit reverse-engineering.
-            if (raw == 0) {
-                return snprintf(buf, buf_len, "(none)");
-            } else {
-                int off = format_bits(s_fault_bits,
-                                      sizeof(s_fault_bits)/sizeof(s_fault_bits[0]),
-                                      raw, buf, buf_len);
-                if ((size_t)off < buf_len - 1) {
-                    off += snprintf(buf + off, buf_len - off, " (0x%02X)", raw & 0xFF);
-                }
-                return off;
-            }
+            return format_fault(s_fault_refrig_bits,
+                                sizeof(s_fault_refrig_bits)/sizeof(s_fault_refrig_bits[0]),
+                                raw, buf, buf_len);
+        case REG_FAULT_ELEC:
+            return format_fault(s_fault_elec_bits,
+                                sizeof(s_fault_elec_bits)/sizeof(s_fault_elec_bits[0]),
+                                raw, buf, buf_len);
+        case REG_FAULT_SENSOR_COMP:
+            return format_fault(s_fault_sensor_comp_bits,
+                                sizeof(s_fault_sensor_comp_bits)/sizeof(s_fault_sensor_comp_bits[0]),
+                                raw, buf, buf_len);
+        case REG_FAULT_SENSOR_EE:
+            return format_fault(s_fault_sensor_ee_bits,
+                                sizeof(s_fault_sensor_ee_bits)/sizeof(s_fault_sensor_ee_bits[0]),
+                                raw, buf, buf_len);
         default:
             return snprintf(buf, buf_len, "0x%04X", raw);
     }

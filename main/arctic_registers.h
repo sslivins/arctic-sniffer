@@ -36,15 +36,18 @@ constexpr uint16_t REG_AC_VOLTAGE           = 2101;  // A13 AC input voltage (x1
 constexpr uint16_t REG_MAIN_EEV             = 2104;  // A5  main elec. expansion valve
 constexpr uint16_t REG_IPM_TEMP             = 2113;  // A8  IPM module temp
 constexpr uint16_t REG_REALTIME_POWER       = 2114;  // A9  real-time power (x100 = W)
-constexpr uint16_t REG_FAULT                = 2128;  // fault/protection bitfield
-constexpr uint16_t REG_RUNNING_FLAG         = 2129;  // running flag (tentative)
-constexpr uint16_t REG_STATUS_BYTE          = 2130;  // status: bit2=comp, bit3=pump
+constexpr uint16_t REG_FAULT_SENSOR_EE      = 2125;  // fault bitfield: sensor/EE/comm E-codes
+constexpr uint16_t REG_FAULT_SENSOR_COMP    = 2126;  // fault bitfield: sensor/comm/compressor (E + r01/r02)
+constexpr uint16_t REG_FAULT_ELEC           = 2127;  // fault bitfield: electrical/power-stage (r-codes + P02/P11)
+constexpr uint16_t REG_FAULT                = 2128;  // fault bitfield: refrigerant/protection (P-codes)
+constexpr uint16_t REG_ICON_BITS2           = 2129;  // icon bitfield #2: bit1 defrost, bit4 fan
+constexpr uint16_t REG_STATUS_BYTE          = 2130;  // icon bitfield #1: bit2=comp, bit3=pump
 constexpr uint16_t REG_OUTLET_WATER_TEMP    = 2132;  // o3  outlet (supply) water temp
 constexpr uint16_t REG_INLET_WATER_TEMP     = 2133;  // o2  inlet (return) water temp
 constexpr uint16_t REG_OUTDOOR_AMBIENT_TEMP = 2134;  // o4  ambient temp
 constexpr uint16_t REG_COOL_COIL_TEMP       = 2135;  // A6  cool coil temp
-constexpr uint16_t REG_SUCTION_TEMP         = 2136;  // A3  suction temp
-constexpr uint16_t REG_COIL_TEMP            = 2137;  // A2  coil temp
+constexpr uint16_t REG_COIL_TEMP            = 2136;  // A2  coil temp
+constexpr uint16_t REG_SUCTION_TEMP         = 2137;  // A3  suction temp
 constexpr uint16_t REG_DISCHARGE_TEMP       = 2138;  // A1  discharge temp
 constexpr uint16_t REG_COMPRESSOR_FREQ      = 2141;  // A14 compressor frequency
 
