@@ -80,6 +80,58 @@ static void snapshot_store(uint16_t addr, uint8_t raw)
     s_snap_valid[idx] = true;
 }
 
+// ---------------------------------------------------------------------------
+// Unknown-register tracker — always-on capture of any address the decoder has
+// no metadata for (arctic::register_lookup() == nullptr). Survives snapshot
+// clears so unexpected registers appearing while the device is left unattended
+// are recorded for later review. Indexed over the same 2000..2199 span.
+// ---------------------------------------------------------------------------
+static uint8_t  s_unk_raw[SNAP_SPAN]     = {0};
+static bool     s_unk_valid[SNAP_SPAN]   = {false};
+static uint32_t s_unk_seen[SNAP_SPAN]    = {0};
+static uint32_t s_unk_changes[SNAP_SPAN] = {0};
+static int64_t  s_unk_first[SNAP_SPAN]   = {0};
+static int64_t  s_unk_last[SNAP_SPAN]    = {0};
+static std::atomic<uint32_t> s_unk_count{0};  // distinct unknown addrs seen
+
+static void track_unknown(uint16_t addr, uint8_t raw)
+{
+    // Only track addresses the decoder doesn't recognize.
+    if (arctic::register_lookup(addr) != nullptr) return;
+
+    if (addr < SNAP_BASE || (uint16_t)(addr - SNAP_BASE) >= SNAP_SPAN) {
+        // Out-of-span unknown address — genuinely unexpected. Log it (the
+        // per-address table only covers the known span).
+        ESP_LOGW(TAG, "Unknown register 0x%04X (%u) out of tracking span: raw=0x%02X",
+                 addr, addr, raw);
+        return;
+    }
+
+    uint16_t idx = (uint16_t)(addr - SNAP_BASE);
+    int64_t now = now_ms();
+
+    if (!s_unk_valid[idx]) {
+        s_unk_valid[idx]  = true;
+        s_unk_raw[idx]    = raw;
+        s_unk_seen[idx]   = 1;
+        s_unk_changes[idx]= 0;
+        s_unk_first[idx]  = now;
+        s_unk_last[idx]   = now;
+        s_unk_count.fetch_add(1, std::memory_order_relaxed);
+        ESP_LOGW(TAG, "Unknown register %u first seen: raw=0x%02X", addr, raw);
+        return;
+    }
+
+    s_unk_seen[idx]++;
+    s_unk_last[idx] = now;
+    if (s_unk_raw[idx] != raw) {
+        ESP_LOGW(TAG, "Unknown register %u changed: 0x%02X -> 0x%02X",
+                 addr, s_unk_raw[idx], raw);
+        s_unk_raw[idx] = raw;
+        s_unk_changes[idx]++;
+    }
+}
+
 static void record_command(uint8_t dir, uint16_t selector, uint16_t value)
 {
     uint32_t n = s_cmd_count.fetch_add(1, std::memory_order_relaxed);
@@ -207,6 +259,7 @@ static void process_frame(const uint8_t *buf, size_t len)
         uint16_t addr = (uint16_t)(win->reg_base + i);
         txn.values[i] = decode_byte(data[i], addr);
         snapshot_store(addr, data[i]);   // raw byte for OFF/ON diffing
+        track_unknown(addr, data[i]);    // capture registers we don't know about
     }
     txn.reg_count = (uint16_t)data_bytes;
 
@@ -533,6 +586,39 @@ void clear_snapshot()
     memset(s_snap_raw, 0, sizeof(s_snap_raw));
     memset(s_snap_valid, 0, sizeof(s_snap_valid));
     s_cmd_count.store(0, std::memory_order_relaxed);
+}
+
+size_t get_unknown_registers(UnknownReg *out, size_t max)
+{
+    if (!out || max == 0) return 0;
+    size_t n = 0;
+    for (uint16_t i = 0; i < SNAP_SPAN && n < max; ++i) {
+        if (!s_unk_valid[i]) continue;
+        out[n].addr     = (uint16_t)(SNAP_BASE + i);
+        out[n].last_raw = s_unk_raw[i];
+        out[n].seen     = s_unk_seen[i];
+        out[n].changes  = s_unk_changes[i];
+        out[n].first_ms = s_unk_first[i];
+        out[n].last_ms  = s_unk_last[i];
+        ++n;
+    }
+    return n;
+}
+
+uint32_t get_unknown_count()
+{
+    return s_unk_count.load(std::memory_order_relaxed);
+}
+
+void clear_unknown_registers()
+{
+    memset(s_unk_raw, 0, sizeof(s_unk_raw));
+    memset(s_unk_valid, 0, sizeof(s_unk_valid));
+    memset(s_unk_seen, 0, sizeof(s_unk_seen));
+    memset(s_unk_changes, 0, sizeof(s_unk_changes));
+    memset(s_unk_first, 0, sizeof(s_unk_first));
+    memset(s_unk_last, 0, sizeof(s_unk_last));
+    s_unk_count.store(0, std::memory_order_relaxed);
 }
 
 bool get_rx_inverted() { return s_rx_inverted.load(std::memory_order_relaxed); }

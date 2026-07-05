@@ -1,7 +1,9 @@
 #include "api_server.h"
 #include "recorder.h"
 #include "arctic_registers.h"
+#include "modbus_sniffer.h"
 #include "wifi_manager.h"
+#include "ota_manager.h"
 
 #include <cstdio>
 #include <cstring>
@@ -12,6 +14,10 @@
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "esp_app_desc.h"
+#include "esp_ota_ops.h"
+#include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "api";
 
@@ -487,6 +493,274 @@ static esp_err_t handle_options(httpd_req_t *req)
 }
 
 // ---------------------------------------------------------------------------
+// GET /api/unknown — registers the decoder doesn't recognize (always-on capture)
+// DELETE /api/unknown — clear the unknown-register table
+// ---------------------------------------------------------------------------
+
+static esp_err_t handle_unknown(httpd_req_t *req)
+{
+    set_cors(req);
+    httpd_resp_set_type(req, "application/json");
+
+    if (req->method == HTTP_DELETE) {
+        sniffer::clear_unknown_registers();
+        return httpd_resp_sendstr(req, "{\"status\":\"cleared\"}");
+    }
+
+    static sniffer::UnknownReg regs[sniffer::MAX_REGS > 200 ? sniffer::MAX_REGS : 200];
+    size_t n = sniffer::get_unknown_registers(regs, sizeof(regs) / sizeof(regs[0]));
+
+    char head[64];
+    snprintf(head, sizeof(head), "{\"count\":%lu,\"registers\":[",
+             (unsigned long)n);
+    httpd_resp_sendstr_chunk(req, head);
+    for (size_t i = 0; i < n; ++i) {
+        char buf[192];
+        snprintf(buf, sizeof(buf),
+                 "%s{\"addr\":%u,\"last_value\":%u,\"seen\":%lu,\"changes\":%lu,"
+                 "\"first_ms\":%lld,\"last_ms\":%lld}",
+                 (i == 0) ? "" : ",",
+                 regs[i].addr, regs[i].last_raw,
+                 (unsigned long)regs[i].seen, (unsigned long)regs[i].changes,
+                 (long long)regs[i].first_ms, (long long)regs[i].last_ms);
+        httpd_resp_sendstr_chunk(req, buf);
+    }
+    httpd_resp_sendstr_chunk(req, "]}");
+    httpd_resp_sendstr_chunk(req, nullptr);
+    return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
+// OTA firmware update
+// ---------------------------------------------------------------------------
+
+static const char *ota_state_str(ota_state_t s)
+{
+    switch (s) {
+        case OTA_STATE_IDLE:            return "idle";
+        case OTA_STATE_CHECKING:        return "checking";
+        case OTA_STATE_UPLOADING:       return "uploading";
+        case OTA_STATE_DOWNLOADING:     return "downloading";
+        case OTA_STATE_VERIFYING:       return "verifying";
+        case OTA_STATE_READY_TO_REBOOT: return "ready_to_reboot";
+        case OTA_STATE_FAILED:          return "failed";
+        default:                        return "unknown";
+    }
+}
+
+// GET /api/ota/status
+static esp_err_t handle_ota_status(httpd_req_t *req)
+{
+    set_cors(req);
+    httpd_resp_set_type(req, "application/json");
+
+    ota_status_t st = ota_mgr_get_status();
+    char buf[512];
+    int len = snprintf(buf, sizeof(buf),
+        "{\"state\":\"%s\",\"progress\":%d,\"bytes_downloaded\":%u,"
+        "\"total_bytes\":%u,\"current_version\":\"%s\",\"new_version\":\"%s\","
+        "\"error\":\"%s\"}",
+        ota_state_str(st.state), st.progress_percent,
+        (unsigned)st.bytes_downloaded, (unsigned)st.total_bytes,
+        st.current_version, st.new_version, st.error_msg);
+    return httpd_resp_send(req, buf, len);
+}
+
+// GET /api/ota/releases — check GitHub for the latest release
+static esp_err_t handle_ota_releases(httpd_req_t *req)
+{
+    set_cors(req);
+    httpd_resp_set_type(req, "application/json");
+
+    ota_release_info_t info;
+    if (!ota_mgr_check_github_releases(&info)) {
+        httpd_resp_set_status(req, "502 Bad Gateway");
+        return httpd_resp_sendstr(req, "{\"error\":\"Failed to check GitHub for updates\"}");
+    }
+
+    ota_status_t st = ota_mgr_get_status();
+    char buf[512];
+    int len = snprintf(buf, sizeof(buf),
+        "{\"update_available\":%s,\"current_version\":\"%s\",\"latest_version\":\"%s\","
+        "\"published_at\":\"%s\",\"download_ready\":%s}",
+        info.update_available ? "true" : "false",
+        st.current_version, info.latest_version, info.published_at,
+        (info.download_url[0] != '\0') ? "true" : "false");
+    return httpd_resp_send(req, buf, len);
+}
+
+// POST /api/ota/github — download+flash the latest GitHub release (check first)
+static esp_err_t handle_ota_github(httpd_req_t *req)
+{
+    set_cors(req);
+    httpd_resp_set_type(req, "application/json");
+
+    const ota_release_info_t *info = ota_mgr_get_release_info();
+    if (!info->update_available) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        return httpd_resp_sendstr(req, "{\"error\":\"No update available - check for updates first\"}");
+    }
+    if (!ota_mgr_start_github_update()) {
+        httpd_resp_set_status(req, "409 Conflict");
+        return httpd_resp_sendstr(req, "{\"error\":\"OTA already in progress or no download URL\"}");
+    }
+    char buf[128];
+    snprintf(buf, sizeof(buf), "{\"status\":\"started\",\"version\":\"%s\"}",
+             info->latest_version);
+    return httpd_resp_sendstr(req, buf);
+}
+
+// POST /api/ota/update — download+flash from an explicit (allowed) URL
+static esp_err_t handle_ota_update(httpd_req_t *req)
+{
+    set_cors(req);
+    httpd_resp_set_type(req, "application/json");
+
+    char body[320] = {0};
+    int received = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (received <= 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        return httpd_resp_sendstr(req, "{\"error\":\"No body\"}");
+    }
+
+    // Extract "url":"..."
+    char url[256] = {0};
+    const char *u = strstr(body, "\"url\"");
+    if (u) {
+        u = strchr(u, ':');
+        if (u) u = strchr(u, '"');
+        if (u) {
+            const char *end = strchr(u + 1, '"');
+            if (end && (size_t)(end - u - 1) < sizeof(url)) {
+                memcpy(url, u + 1, end - u - 1);
+            }
+        }
+    }
+    if (url[0] == '\0') {
+        httpd_resp_set_status(req, "400 Bad Request");
+        return httpd_resp_sendstr(req, "{\"error\":\"Missing 'url' field\"}");
+    }
+    if (!ota_mgr_is_url_allowed(url)) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        return httpd_resp_sendstr(req, "{\"error\":\"URL not allowed - must be from the official GitHub repo\"}");
+    }
+    if (!ota_mgr_start_update(url)) {
+        httpd_resp_set_status(req, "409 Conflict");
+        return httpd_resp_sendstr(req, "{\"error\":\"OTA update already in progress\"}");
+    }
+    return httpd_resp_sendstr(req, "{\"status\":\"started\"}");
+}
+
+// POST /api/ota/upload — receive a raw .bin body and flash it
+static esp_err_t handle_ota_upload(httpd_req_t *req)
+{
+    set_cors(req);
+    httpd_resp_set_type(req, "application/json");
+
+    if (!ota_mgr_try_lock_upload()) {
+        httpd_resp_set_status(req, "409 Conflict");
+        return httpd_resp_sendstr(req, "{\"error\":\"Another OTA update is already in progress\"}");
+    }
+
+    ESP_LOGI(TAG, "Receiving firmware upload, content length: %d", req->content_len);
+
+    const esp_partition_t *part = esp_ota_get_next_update_partition(nullptr);
+    if (part == nullptr) {
+        ota_mgr_unlock_upload();
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        return httpd_resp_sendstr(req, "{\"error\":\"No OTA partition available\"}");
+    }
+
+    esp_ota_handle_t ota_handle;
+    esp_err_t err = esp_ota_begin(part, OTA_SIZE_UNKNOWN, &ota_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
+        ota_mgr_unlock_upload();
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        return httpd_resp_sendstr(req, "{\"error\":\"Failed to begin OTA\"}");
+    }
+
+    char *buf = (char *)malloc(4096);
+    if (buf == nullptr) {
+        esp_ota_abort(ota_handle);
+        ota_mgr_unlock_upload();
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        return httpd_resp_sendstr(req, "{\"error\":\"Out of memory\"}");
+    }
+
+    size_t total = 0;
+    int received;
+    bool ok = true;
+    bool header_ok = false;
+    while ((received = httpd_req_recv(req, buf, 4096)) > 0) {
+        if (!header_ok) {
+            if ((uint8_t)buf[0] != 0xE9) {
+                ESP_LOGE(TAG, "Invalid firmware header: 0x%02X", (uint8_t)buf[0]);
+                esp_ota_abort(ota_handle);
+                free(buf);
+                ota_mgr_unlock_upload();
+                httpd_resp_set_status(req, "400 Bad Request");
+                return httpd_resp_sendstr(req, "{\"error\":\"Invalid firmware (not an ESP32 image)\"}");
+            }
+            header_ok = true;
+        }
+        err = esp_ota_write(ota_handle, buf, received);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(err));
+            ok = false;
+            break;
+        }
+        total += received;
+    }
+    free(buf);
+
+    if (!ok || received < 0) {
+        esp_ota_abort(ota_handle);
+        ota_mgr_unlock_upload();
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        return httpd_resp_sendstr(req, "{\"error\":\"Upload failed\"}");
+    }
+
+    err = esp_ota_end(ota_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_end failed: %s", esp_err_to_name(err));
+        ota_mgr_unlock_upload();
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        return httpd_resp_sendstr(req, "{\"error\":\"Image validation failed\"}");
+    }
+    err = esp_ota_set_boot_partition(part);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_set_boot_partition failed: %s", esp_err_to_name(err));
+        ota_mgr_unlock_upload();
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        return httpd_resp_sendstr(req, "{\"error\":\"Failed to set boot partition\"}");
+    }
+
+    ESP_LOGI(TAG, "Firmware upload complete: %u bytes — rebooting", (unsigned)total);
+
+    char resp[128];
+    snprintf(resp, sizeof(resp),
+             "{\"success\":true,\"bytes_received\":%u,\"message\":\"Rebooting...\"}",
+             (unsigned)total);
+    httpd_resp_sendstr(req, resp);
+
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    esp_restart();
+    return ESP_OK;
+}
+
+// POST /api/ota/reboot
+static esp_err_t handle_ota_reboot(httpd_req_t *req)
+{
+    set_cors(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"rebooting\"}");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
 // WebSocket handler — /ws
 // ---------------------------------------------------------------------------
 
@@ -534,7 +808,7 @@ esp_err_t init()
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.uri_match_fn = httpd_uri_match_wildcard;
-    cfg.max_uri_handlers = 16;
+    cfg.max_uri_handlers = 28;
     cfg.close_fn = on_close;
     cfg.lru_purge_enable = true;
     cfg.max_open_sockets = 7;
@@ -561,6 +835,14 @@ esp_err_t init()
         { "/api/record/stop",    HTTP_POST,   handle_record_stop,     nullptr },
         { "/api/record/download",HTTP_GET,    handle_record_download, nullptr },
         { "/api/record",         HTTP_DELETE, handle_record_clear,    nullptr },
+        { "/api/unknown",        HTTP_GET,    handle_unknown,         nullptr },
+        { "/api/unknown",        HTTP_DELETE, handle_unknown,         nullptr },
+        { "/api/ota/status",     HTTP_GET,    handle_ota_status,      nullptr },
+        { "/api/ota/releases",   HTTP_GET,    handle_ota_releases,    nullptr },
+        { "/api/ota/github",     HTTP_POST,   handle_ota_github,      nullptr },
+        { "/api/ota/update",     HTTP_POST,   handle_ota_update,      nullptr },
+        { "/api/ota/upload",     HTTP_POST,   handle_ota_upload,      nullptr },
+        { "/api/ota/reboot",     HTTP_POST,   handle_ota_reboot,      nullptr },
         { "/api/*",              HTTP_OPTIONS,handle_options,         nullptr },
     };
 

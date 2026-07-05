@@ -48,6 +48,19 @@ struct RegisterSample {
     uint8_t  raw;    // raw byte value on the wire
 };
 
+/// An "unknown" register: an address seen on the wire that the decoder has no
+/// metadata for (arctic::register_lookup() returns nullptr). Tracked always-on
+/// (independent of recording / snapshot clears) so unexpected registers that
+/// appear while the device is left unattended are captured for later review.
+struct UnknownReg {
+    uint16_t addr;       // Arctic register number
+    uint8_t  last_raw;   // most recent raw byte seen
+    uint32_t seen;       // total times observed
+    uint32_t changes;    // times the value changed
+    int64_t  first_ms;   // when first observed
+    int64_t  last_ms;    // when last observed
+};
+
 /// Copy up to `max` most-recent captured command frames (newest last) into
 /// `out`. Returns the number written.
 size_t get_recent_commands(CommandRec *out, size_t max);
@@ -58,6 +71,17 @@ uint32_t get_command_count();
 /// Copy the latest raw snapshot of every register seen so far into `out`
 /// (ascending address). Returns the number written (<= max).
 size_t get_register_snapshot(RegisterSample *out, size_t max);
+
+/// Copy the table of unknown registers seen so far into `out` (ascending
+/// address). Returns the number written (<= max). This table is always-on and
+/// is NOT affected by clear_snapshot().
+size_t get_unknown_registers(UnknownReg *out, size_t max);
+
+/// Total number of distinct unknown registers seen since boot/clear.
+uint32_t get_unknown_count();
+
+/// Clear the unknown-register table.
+void clear_unknown_registers();
 
 /// Clear the raw register snapshot and command ring (for a clean OFF/ON
 /// baseline before capturing).
