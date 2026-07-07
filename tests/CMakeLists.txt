@@ -24,10 +24,10 @@ enable_testing()
 
 add_executable(test_tuya_codec
     test_tuya_codec.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../main/tuya_codec.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/arctic-macon/src/tuya_codec.cpp
 )
 target_include_directories(test_tuya_codec PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../main
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/arctic-macon/include
 )
 
 add_test(NAME tuya_codec COMMAND test_tuya_codec)
