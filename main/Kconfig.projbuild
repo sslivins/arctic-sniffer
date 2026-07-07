@@ -54,9 +54,12 @@ menu "Arctic Sniffer Configuration"
 
         config SNIFFER_UART_BAUD
             int "Baud Rate"
-            default 2400
+            default 4800
             help
-                Baud rate for the Modbus RTU bus.
+                Default boot baud rate for the heat-pump bus. The V1.3
+                PDF claims 2400, but scope measurement on a real
+                Arctic ECO-600 + heat-pump pair shows 4800 (208 µs/bit).
+                Runtime-tunable via POST /api/config.
     endmenu
 
     menu "Display & Button"

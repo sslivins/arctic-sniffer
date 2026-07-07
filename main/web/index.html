@@ -99,6 +99,37 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .reg-addr { color: var(--muted); min-width: 44px; }
 .reg-name { color: var(--accent); min-width: 180px; }
 .reg-val  { color: var(--text); }
+/* --- Modal (OTA / Unknown registers) --- */
+.modal-bg {
+    display: none; position: fixed; inset: 0; z-index: 100;
+    background: rgba(0,0,0,0.6); align-items: flex-start; justify-content: center;
+    padding: 40px 16px; overflow-y: auto;
+}
+.modal-bg.open { display: flex; }
+.modal {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; width: 100%; max-width: 640px; padding: 20px;
+}
+.modal h2 { font-size: 16px; margin-bottom: 12px; display: flex;
+    justify-content: space-between; align-items: center; }
+.modal h2 .close { cursor: pointer; color: var(--muted); font-size: 20px; }
+.modal .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    margin: 10px 0; }
+.modal label { color: var(--muted); font-size: 13px; }
+.mono { font-family: 'Cascadia Code','Fira Code',monospace; }
+.ota-status { font-size: 13px; color: var(--muted); margin-top: 8px;
+    white-space: pre-wrap; word-break: break-word; }
+.progress { height: 6px; background: var(--border); border-radius: 3px;
+    overflow: hidden; margin-top: 8px; display: none; }
+.progress.show { display: block; }
+.progress > div { height: 100%; width: 0; background: var(--accent);
+    transition: width 0.3s; }
+table.unk { width: 100%; border-collapse: collapse; font-size: 12.5px;
+    font-family: 'Cascadia Code','Fira Code',monospace; }
+table.unk th, table.unk td { text-align: left; padding: 4px 8px;
+    border-bottom: 1px solid var(--border); }
+table.unk th { color: var(--muted); font-weight: 600; }
+table.unk td.num { text-align: right; color: var(--yellow); }
 </style>
 </head>
 <body>
@@ -135,6 +166,54 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
         <span>Txns: <b id="statTxn">0</b></span>
     </div>
     <button onclick="clearLog()" title="Clear display">🧹</button>
+    <button onclick="openUnknown()" title="Unknown registers">❓</button>
+    <button onclick="openOta()" title="Firmware update">⬆ OTA</button>
+</div>
+
+<!-- Unknown registers modal -->
+<div class="modal-bg" id="unkModal">
+  <div class="modal">
+    <h2>Unknown Registers <span class="close" onclick="closeModal('unkModal')">✕</span></h2>
+    <div class="ota-status">Registers seen on the bus that the decoder does not recognize.
+Captured continuously since boot (or last clear).</div>
+    <div class="row">
+      <button class="primary" onclick="loadUnknown()">↻ Refresh</button>
+      <button class="danger" onclick="clearUnknown()">🗑 Clear</button>
+      <span id="unkCount" style="color:var(--muted)"></span>
+    </div>
+    <table class="unk">
+      <thead><tr><th>Addr</th><th>Last value</th><th>Seen</th><th>Changes</th><th>Age (s)</th></tr></thead>
+      <tbody id="unkBody"><tr><td colspan="5" style="color:var(--muted)">— no data —</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- OTA modal -->
+<div class="modal-bg" id="otaModal">
+  <div class="modal">
+    <h2>Firmware Update <span class="close" onclick="closeModal('otaModal')">✕</span></h2>
+    <div class="row"><label>Current version:</label>
+      <span class="mono" id="otaCurVer">—</span></div>
+    <hr style="border-color:var(--border);margin:12px 0">
+    <div class="row">
+      <button class="primary" onclick="otaCheck()">🔍 Check GitHub</button>
+      <span id="otaLatest" class="mono" style="color:var(--muted)"></span>
+    </div>
+    <div class="row" id="otaGithubRow" style="display:none">
+      <button class="primary" onclick="otaGithub()">⬇ Download &amp; Install update</button>
+    </div>
+    <hr style="border-color:var(--border);margin:12px 0">
+    <div class="row">
+      <label>Upload .bin:</label>
+      <input type="file" id="otaFile" accept=".bin">
+      <button onclick="otaUpload()">⬆ Upload &amp; Install</button>
+    </div>
+    <div class="progress" id="otaProgress"><div id="otaProgressBar"></div></div>
+    <div class="ota-status" id="otaStatus"></div>
+    <div class="row" style="margin-top:14px">
+      <button class="danger" onclick="otaReboot()">⟳ Reboot device</button>
+    </div>
+  </div>
 </div>
 
 <div id="log"></div>
@@ -408,6 +487,154 @@ async function toggleStream() {
         }
     }
 }
+
+// --- Modals: OTA + Unknown registers ---
+
+function closeModal(id){ document.getElementById(id).classList.remove('open'); }
+
+// Unknown registers
+function openUnknown(){
+    document.getElementById('unkModal').classList.add('open');
+    loadUnknown();
+}
+async function loadUnknown(){
+    try {
+        const r = await fetch('/api/unknown');
+        const d = await r.json();
+        document.getElementById('unkCount').textContent = d.count + ' unknown';
+        const body = document.getElementById('unkBody');
+        if (!d.registers || d.registers.length === 0){
+            body.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">— none —</td></tr>';
+            return;
+        }
+        const now = Date.now();
+        d.registers.sort((a,b) => a.addr - b.addr);
+        body.innerHTML = d.registers.map(x => {
+            const age = x.last_ms > 0 ? Math.round((now - x.last_ms)/1000) : '?';
+            return `<tr><td>${x.addr}</td>`
+                 + `<td>${x.last_value} <span style="color:var(--muted)">0x${x.last_value.toString(16).padStart(2,'0')}</span></td>`
+                 + `<td class="num">${x.seen}</td>`
+                 + `<td class="num">${x.changes}</td>`
+                 + `<td class="num">${age}</td></tr>`;
+        }).join('');
+    } catch(e) {
+        document.getElementById('unkBody').innerHTML =
+            '<tr><td colspan="5" style="color:var(--red)">fetch failed</td></tr>';
+    }
+}
+async function clearUnknown(){
+    if (!confirm('Clear the unknown-register table?')) return;
+    await fetch('/api/unknown', {method:'DELETE'});
+    loadUnknown();
+}
+
+// OTA
+function openOta(){
+    document.getElementById('otaModal').classList.add('open');
+    document.getElementById('otaCurVer').textContent =
+        document.getElementById('verLabel').textContent || '—';
+    otaPoll();
+}
+function setOtaStatus(t){ document.getElementById('otaStatus').textContent = t; }
+async function otaCheck(){
+    setOtaStatus('Checking GitHub…');
+    document.getElementById('otaGithubRow').style.display = 'none';
+    try {
+        const r = await fetch('/api/ota/releases');
+        const d = await r.json();
+        if (d.error){ setOtaStatus('Error: ' + d.error); return; }
+        document.getElementById('otaLatest').textContent =
+            'latest: ' + d.latest_version;
+        if (d.update_available && d.download_ready){
+            document.getElementById('otaGithubRow').style.display = '';
+            setOtaStatus('Update available: ' + d.latest_version);
+        } else {
+            setOtaStatus('Up to date (' + d.current_version + ').');
+        }
+    } catch(e){ setOtaStatus('Check failed.'); }
+}
+async function otaGithub(){
+    if (!confirm('Download and install the latest release? The device will reboot.')) return;
+    setOtaStatus('Starting download…');
+    try {
+        const r = await fetch('/api/ota/github', {method:'POST'});
+        const d = await r.json();
+        if (d.error){ setOtaStatus('Error: ' + d.error); return; }
+        pollOtaProgress();
+    } catch(e){ setOtaStatus('Failed to start.'); }
+}
+async function otaUpload(){
+    const f = document.getElementById('otaFile').files[0];
+    if (!f){ setOtaStatus('Choose a .bin file first.'); return; }
+    if (!confirm('Upload and install ' + f.name + '? The device will reboot.')) return;
+    setOtaStatus('Uploading ' + f.name + '…');
+    const prog = document.getElementById('otaProgress');
+    const bar = document.getElementById('otaProgressBar');
+    prog.classList.add('show');
+    try {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/ota/upload');
+        xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable){
+                bar.style.width = Math.round(e.loaded/e.total*100) + '%';
+            }
+        };
+        xhr.onload = () => {
+            if (xhr.status === 200){
+                setOtaStatus('Upload complete — rebooting…');
+                bar.style.width = '100%';
+            } else {
+                let msg = xhr.responseText;
+                try { msg = JSON.parse(xhr.responseText).error || msg; } catch {}
+                setOtaStatus('Upload failed: ' + msg);
+                prog.classList.remove('show');
+            }
+        };
+        xhr.onerror = () => { setOtaStatus('Upload failed (connection).'); };
+        xhr.send(f);
+    } catch(e){ setOtaStatus('Upload failed.'); }
+}
+async function otaReboot(){
+    if (!confirm('Reboot the device now?')) return;
+    setOtaStatus('Rebooting…');
+    try { await fetch('/api/ota/reboot', {method:'POST'}); } catch {}
+}
+let otaPollTimer = null;
+async function otaPoll(){
+    try {
+        const r = await fetch('/api/ota/status');
+        const d = await r.json();
+        if (d.current_version)
+            document.getElementById('otaCurVer').textContent = 'v' + d.current_version;
+    } catch {}
+}
+function pollOtaProgress(){
+    const prog = document.getElementById('otaProgress');
+    const bar = document.getElementById('otaProgressBar');
+    prog.classList.add('show');
+    if (otaPollTimer) clearInterval(otaPollTimer);
+    otaPollTimer = setInterval(async () => {
+        try {
+            const r = await fetch('/api/ota/status');
+            const d = await r.json();
+            bar.style.width = (d.progress || 0) + '%';
+            setOtaStatus('State: ' + d.state + ' — ' + (d.progress||0) + '%'
+                + (d.error ? ('  ' + d.error) : ''));
+            if (d.state === 'ready_to_reboot'){
+                clearInterval(otaPollTimer);
+                setOtaStatus('Update ready — rebooting…');
+                await fetch('/api/ota/reboot', {method:'POST'}).catch(()=>{});
+            } else if (d.state === 'failed'){
+                clearInterval(otaPollTimer);
+            }
+        } catch {}
+    }, 1500);
+}
+
+// Close modal on background click
+document.querySelectorAll('.modal-bg').forEach(bg => {
+    bg.addEventListener('click', e => { if (e.target === bg) bg.classList.remove('open'); });
+});
 </script>
 </body>
 </html>

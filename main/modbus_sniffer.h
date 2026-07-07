@@ -27,6 +27,66 @@ struct Transaction {
 /// Callback type for completed transactions
 using TransactionCallback = std::function<void(const Transaction &txn)>;
 
+// ---------------------------------------------------------------------------
+// Reverse-engineering aids: raw register snapshot + fc=0x06 command capture
+// ---------------------------------------------------------------------------
+
+/// A captured controller command frame (fc=0x06). On the real bus the
+/// controller sends dir=0xF0 (controller -> unit); the unit may echo dir=0x0F.
+struct CommandRec {
+    int64_t  timestamp_ms;   // when captured
+    uint8_t  dir;            // 0xF0 controller->unit, 0x0F unit->controller
+    uint16_t selector;       // wire field_a (command selector, e.g. 0xFFFF)
+    uint16_t value;          // wire field_b (command value, e.g. 0x0001 = ON)
+};
+
+constexpr size_t COMMAND_RING_SZ = 32;
+
+/// One register's latest raw (undecoded) byte as seen on the wire.
+struct RegisterSample {
+    uint16_t addr;   // Arctic register number (2000.. or 2100..)
+    uint8_t  raw;    // raw byte value on the wire
+};
+
+/// An "unknown" register: an address seen on the wire that the decoder has no
+/// metadata for (arctic::register_lookup() returns nullptr). Tracked always-on
+/// (independent of recording / snapshot clears) so unexpected registers that
+/// appear while the device is left unattended are captured for later review.
+struct UnknownReg {
+    uint16_t addr;       // Arctic register number
+    uint8_t  last_raw;   // most recent raw byte seen
+    uint32_t seen;       // total times observed
+    uint32_t changes;    // times the value changed
+    int64_t  first_ms;   // when first observed
+    int64_t  last_ms;    // when last observed
+};
+
+/// Copy up to `max` most-recent captured command frames (newest last) into
+/// `out`. Returns the number written.
+size_t get_recent_commands(CommandRec *out, size_t max);
+
+/// Total fc=0x06 command frames seen since init/clear.
+uint32_t get_command_count();
+
+/// Copy the latest raw snapshot of every register seen so far into `out`
+/// (ascending address). Returns the number written (<= max).
+size_t get_register_snapshot(RegisterSample *out, size_t max);
+
+/// Copy the table of unknown registers seen so far into `out` (ascending
+/// address). Returns the number written (<= max). This table is always-on and
+/// is NOT affected by clear_snapshot().
+size_t get_unknown_registers(UnknownReg *out, size_t max);
+
+/// Total number of distinct unknown registers seen since boot/clear.
+uint32_t get_unknown_count();
+
+/// Clear the unknown-register table.
+void clear_unknown_registers();
+
+/// Clear the raw register snapshot and command ring (for a clean OFF/ON
+/// baseline before capturing).
+void clear_snapshot();
+
 /// Initialize the UART-based Modbus sniffer.  Starts a FreeRTOS task that
 /// continuously reads bytes, detects frame boundaries, parses Modbus RTU
 /// frames, and pairs master requests with slave responses.
@@ -40,5 +100,35 @@ uint32_t get_crc_errors();
 
 /// Return total transactions (paired req+resp) since init.
 uint32_t get_transaction_count();
+
+/// Get current baud rate.
+uint32_t get_baud_rate();
+
+/// Change baud rate at runtime. Returns true on success.
+bool set_baud_rate(uint32_t baud);
+
+/// Reset error/frame counters.
+void reset_stats();
+
+/// Get RX signal inversion state.
+bool get_rx_inverted();
+
+/// Set RX signal inversion (for swapped A/B wires). Returns true on success.
+bool set_rx_inverted(bool inverted);
+
+/// Parity options
+enum class Parity { NONE, EVEN, ODD };
+
+/// Get current parity setting.
+Parity get_parity();
+
+/// Set parity. Returns true on success.
+bool set_parity(Parity p);
+
+/// Get current stop bits (1 or 2).
+int get_stop_bits();
+
+/// Set stop bits (1 or 2). Returns true on success.
+bool set_stop_bits(int bits);
 
 }  // namespace sniffer

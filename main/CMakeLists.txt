@@ -15,15 +15,17 @@ execute_process(
 idf_component_register(
     SRCS "main.cpp"
          "modbus_sniffer.cpp"
-         "arctic_registers.cpp"
          "recorder.cpp"
          "api_server.cpp"
          "wifi_manager.cpp"
          "dns_server.cpp"
          "display.cpp"
+         "ota_manager.cpp"
     INCLUDE_DIRS "."
     EMBED_FILES "web/index.html.gz"
                 "web/portal.html.gz"
     REQUIRES driver esp_app_format esp_http_server esp_wifi esp_netif
              nvs_flash json esp_timer esp_lcd esp_psram lwip
+             app_update esp_https_ota esp_http_client esp-tls mbedtls
+             arctic-macon
 )

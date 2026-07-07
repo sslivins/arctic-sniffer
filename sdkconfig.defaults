@@ -21,6 +21,13 @@ CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
 CONFIG_HTTPD_MAX_URI_LEN=512
 CONFIG_HTTPD_WS_SUPPORT=y
 
+# OTA — two-slot partition table + automatic rollback. A freshly OTA'd
+# image boots in PENDING_VERIFY; if it fails to reach ota_mgr_mark_valid()
+# (i.e. WiFi + HTTP server didn't come up), the bootloader rolls back to
+# the previous good image on the next reset. Prevents a bad OTA bricking
+# an unattended device.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
 # FreeRTOS
 CONFIG_FREERTOS_HZ=1000
 

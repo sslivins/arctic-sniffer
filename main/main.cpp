@@ -11,6 +11,7 @@
 #include "modbus_sniffer.h"
 #include "recorder.h"
 #include "display.h"
+#include "ota_manager.h"
 
 #include "esp_log.h"
 #include "nvs_flash.h"
@@ -95,6 +96,10 @@ extern "C" void app_main()
         // --- HTTP / WebSocket server ---
         ESP_ERROR_CHECK(api::init());
         ESP_LOGI(TAG, "HTTP server started");
+
+        // --- OTA update manager (manual trigger: GitHub pull or .bin upload) ---
+        ota_mgr_init();
+        ota_mgr_mark_valid();
 
         // --- Recorder auto-stop callback ---
         recorder::set_auto_stop_callback([]() {
