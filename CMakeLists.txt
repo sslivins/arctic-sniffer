@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-set(PROJECT_VER "0.3.4")
+set(PROJECT_VER "0.3.5")
 
 # Allow local overrides (WiFi creds, etc.) — not checked into git
 if(EXISTS "${CMAKE_SOURCE_DIR}/sdkconfig.defaults.local")

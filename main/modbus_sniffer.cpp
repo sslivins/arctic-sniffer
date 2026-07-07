@@ -52,8 +52,20 @@ static std::atomic<uint32_t> s_txn_count{0};
 constexpr size_t SKIPPED_RING_SZ = 256;
 static uint8_t   s_skipped_val[SKIPPED_RING_SZ];
 static int64_t   s_skipped_ms[SKIPPED_RING_SZ];
+// Per-byte correlation context: the length / dir / fc of the last VALID frame
+// consumed immediately BEFORE each skipped byte. This lets /api/skipped test
+// whether a stray value (e.g. the recurring 0x14) tracks the preceding frame's
+// byte length (→ a byte-count ack) or stays constant (→ a fixed heartbeat).
+static uint16_t  s_skipped_prevlen[SKIPPED_RING_SZ];
+static uint8_t   s_skipped_prevdir[SKIPPED_RING_SZ];
+static uint8_t   s_skipped_prevfc[SKIPPED_RING_SZ];
 static size_t    s_skipped_head  = 0;   // next write slot
 static uint32_t  s_skipped_total = 0;   // total bytes ever captured
+
+// Context of the most recently consumed valid frame, attached to skipped bytes.
+static uint16_t  s_last_frame_len = 0;
+static uint8_t   s_last_frame_dir = 0;
+static uint8_t   s_last_frame_fc  = 0;
 
 /// Zero all live counters and the skipped-byte capture (used on init and
 /// whenever UART parameters change to give a clean baseline).
@@ -65,6 +77,9 @@ static void reset_counters()
     s_txn_count.store(0, std::memory_order_relaxed);
     s_skipped_head  = 0;
     s_skipped_total = 0;
+    s_last_frame_len = 0;
+    s_last_frame_dir = 0;
+    s_last_frame_fc  = 0;
 }
 
 // UART event queue — filled by the driver ISR
@@ -319,6 +334,9 @@ static void record_skipped(const uint8_t *buf, size_t n)
     for (size_t i = 0; i < n; ++i) {
         s_skipped_val[s_skipped_head] = buf[i];
         s_skipped_ms[s_skipped_head]  = ms;
+        s_skipped_prevlen[s_skipped_head] = s_last_frame_len;
+        s_skipped_prevdir[s_skipped_head] = s_last_frame_dir;
+        s_skipped_prevfc[s_skipped_head]  = s_last_frame_fc;
         s_skipped_head = (s_skipped_head + 1) % SKIPPED_RING_SZ;
         s_skipped_total++;
     }
@@ -379,6 +397,11 @@ static void try_extract_frames()
         log_hex("Frame", s_blob_buf, flen);
         s_frame_count.fetch_add(1, std::memory_order_relaxed);
         process_frame(s_blob_buf, flen);
+        // Remember this frame's geometry so any bytes skipped before the NEXT
+        // frame can be correlated against the frame that preceded them.
+        s_last_frame_len = (uint16_t)flen;
+        s_last_frame_dir = dir;
+        s_last_frame_fc  = fc;
         consume_front(flen);
     }
 }
@@ -545,9 +568,14 @@ uint32_t get_resync_bytes()      { return s_resync_bytes.load(std::memory_order_
 uint32_t get_transaction_count() { return s_txn_count.load(std::memory_order_relaxed); }
 uint32_t get_skipped_total()     { return s_skipped_total; }
 
-size_t get_skipped_bytes(uint8_t *vals, int64_t *ms_out, size_t max)
+size_t get_skipped_bytes(uint8_t *vals, int64_t *ms_out,
+                         uint16_t *prevlen_out, uint8_t *prevdir_out,
+                         uint8_t *prevfc_out, size_t max)
 {
-    if ((!vals && !ms_out) || max == 0) return 0;
+    if ((!vals && !ms_out && !prevlen_out && !prevdir_out && !prevfc_out) ||
+        max == 0) {
+        return 0;
+    }
     uint32_t total = s_skipped_total;
     size_t   have  = (total < SKIPPED_RING_SZ) ? (size_t)total : SKIPPED_RING_SZ;
     if (have > max) have = max;
@@ -555,8 +583,11 @@ size_t get_skipped_bytes(uint8_t *vals, int64_t *ms_out, size_t max)
     size_t start = (s_skipped_head + SKIPPED_RING_SZ - have) % SKIPPED_RING_SZ;
     for (size_t i = 0; i < have; ++i) {
         size_t idx = (start + i) % SKIPPED_RING_SZ;
-        if (vals)   vals[i]   = s_skipped_val[idx];
-        if (ms_out) ms_out[i] = s_skipped_ms[idx];
+        if (vals)        vals[i]        = s_skipped_val[idx];
+        if (ms_out)      ms_out[i]      = s_skipped_ms[idx];
+        if (prevlen_out) prevlen_out[i] = s_skipped_prevlen[idx];
+        if (prevdir_out) prevdir_out[i] = s_skipped_prevdir[idx];
+        if (prevfc_out)  prevfc_out[i]  = s_skipped_prevfc[idx];
     }
     return have;
 }
