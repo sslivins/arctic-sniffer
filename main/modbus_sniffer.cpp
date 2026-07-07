@@ -725,6 +725,25 @@ size_t get_register_snapshot(RegisterSample *out, size_t max)
     return n;
 }
 
+bool get_macon_state(arctic::MaconState *out)
+{
+    if (!out) return false;
+
+    // Project the raw byte snapshot into a contiguous register image spanning
+    // both wire windows (holding 2000..2057 + telemetry 2100..2142). Unseen
+    // registers stay 0. Then hand the WHOLE image to the library, which owns
+    // the register→field decode — we never parse individual registers here.
+    static uint16_t regs[SNAP_SPAN];
+    bool any_seen = false;
+    for (uint16_t i = 0; i < SNAP_SPAN; ++i) {
+        regs[i] = s_snap_valid[i] ? (uint16_t)s_snap_raw[i] : 0;
+        if (s_snap_valid[i]) any_seen = true;
+    }
+
+    arctic::decode_state(SNAP_BASE, regs, SNAP_SPAN, out);
+    return any_seen;
+}
+
 void clear_snapshot()
 {
     memset(s_snap_raw, 0, sizeof(s_snap_raw));

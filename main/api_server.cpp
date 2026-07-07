@@ -237,6 +237,104 @@ static esp_err_t handle_registers(httpd_req_t *req)
 }
 
 // ---------------------------------------------------------------------------
+// GET /api/state — decoded heat-pump state (arctic-macon library).
+//
+// Uses the bulk-image → library pattern: sniffer::get_macon_state() feeds the
+// WHOLE captured register image to arctic::decode_state() and returns a decoded
+// MaconState. This endpoint only serializes that struct — it does not know or
+// care which wire register carries which field (the library owns that).
+// ---------------------------------------------------------------------------
+
+static esp_err_t handle_state(httpd_req_t *req)
+{
+    set_cors(req);
+    httpd_resp_set_type(req, "application/json");
+
+    arctic::MaconState ms;
+    const bool seen = sniffer::get_macon_state(&ms);
+
+    // Emit a signed int, or JSON null when the source register was absent.
+    auto iv = [](char *b, size_t n, int v, bool valid) {
+        if (valid) snprintf(b, n, "%d", v);
+        else       snprintf(b, n, "null");
+    };
+
+    char tank[8], outlet[8], inlet[8], amb[8], icoil[8], ipm[8];
+    char disc[8], suct[8], ocoil[8], setp[8];
+    char acv[8], acc[8], dcv[8], eev[8], freq[8];
+    iv(tank,   sizeof(tank),   ms.water_tank_c,       ms.water_tank_valid);
+    iv(outlet, sizeof(outlet), ms.outlet_c,           ms.outlet_valid);
+    iv(inlet,  sizeof(inlet),  ms.inlet_c,            ms.inlet_valid);
+    iv(amb,    sizeof(amb),    ms.outdoor_ambient_c,  ms.outdoor_ambient_valid);
+    iv(icoil,  sizeof(icoil),  ms.indoor_coil_c,      ms.indoor_coil_valid);
+    iv(ipm,    sizeof(ipm),    ms.ipm_c,              ms.ipm_valid);
+    iv(disc,   sizeof(disc),   ms.discharge_c,        ms.discharge_valid);
+    iv(suct,   sizeof(suct),   ms.suction_c,          ms.suction_valid);
+    iv(ocoil,  sizeof(ocoil),  ms.outdoor_coil_c,     ms.outdoor_coil_valid);
+    iv(setp,   sizeof(setp),   ms.hot_water_setpoint, ms.hot_water_setpoint_valid);
+    iv(acv,    sizeof(acv),    ms.ac_voltage,         ms.ac_voltage_valid);
+    iv(acc,    sizeof(acc),    ms.ac_current,         ms.ac_current_valid);
+    iv(dcv,    sizeof(dcv),    ms.dc_voltage,         ms.dc_voltage_valid);
+    iv(eev,    sizeof(eev),    ms.primary_eev,        ms.primary_eev_valid);
+    iv(freq,   sizeof(freq),   ms.compressor_freq,    ms.compressor_freq_valid);
+
+    // Human-readable active-fault list, decoded by the library from the four
+    // fault bitfield registers (reg2125-2128). reg2007 bit5 is the run flag,
+    // not a fault, so it is excluded here.
+    char fault_text[224];
+    fault_text[0] = '\0';
+    if (ms.faults_valid) {
+        const struct { uint16_t addr; uint8_t raw; } fr[] = {
+            { arctic::REG_FAULT_SENSOR_EE,   ms.fault_ee   },
+            { arctic::REG_FAULT_SENSOR_COMP, ms.fault_comp },
+            { arctic::REG_FAULT_ELEC,        ms.fault_elec },
+            { arctic::REG_FAULT,             ms.fault_ref  },
+        };
+        for (const auto &f : fr) {
+            if (f.raw == 0) continue;
+            char one[64];
+            arctic::register_format_value(f.addr, f.raw, one, sizeof(one));
+            if (fault_text[0] != '\0') {
+                strncat(fault_text, " | ", sizeof(fault_text) - strlen(fault_text) - 1);
+            }
+            strncat(fault_text, one, sizeof(fault_text) - strlen(fault_text) - 1);
+        }
+    }
+    if (fault_text[0] == '\0') {
+        snprintf(fault_text, sizeof(fault_text), "%s", ms.faults_valid ? "OK" : "—");
+    }
+
+    char buf[1200];
+    snprintf(buf, sizeof(buf),
+        "{\"seen\":%s,"
+        "\"mode\":\"%s\",\"mode_valid\":%s,\"running\":%s,"
+        "\"outputs\":{\"compressor\":%s,\"pump\":%s,\"fan\":%s,\"defrost\":%s},"
+        "\"fan_level\":%u,"
+        "\"setpoint_c\":%s,"
+        "\"temperatures\":{\"tank\":%s,\"outlet\":%s,\"inlet\":%s,\"outdoor\":%s,"
+        "\"indoor_coil\":%s,\"ipm\":%s,\"discharge\":%s,\"suction\":%s,\"outdoor_coil\":%s},"
+        "\"electrical\":{\"ac_voltage\":%s,\"ac_current\":%s,\"dc_voltage\":%s,"
+        "\"primary_eev\":%s,\"compressor_freq\":%s},"
+        "\"faults\":{\"valid\":%s,\"run\":%u,\"ee\":%u,\"comp\":%u,\"elec\":%u,\"ref\":%u,"
+        "\"text\":\"%s\"}}",
+        seen ? "true" : "false",
+        arctic::mode_name(ms.mode), ms.mode_valid ? "true" : "false",
+        ms.running ? "true" : "false",
+        ms.compressor_on ? "true" : "false", ms.pump_on ? "true" : "false",
+        ms.fan_on ? "true" : "false", ms.defrost_on ? "true" : "false",
+        (unsigned)ms.fan_level,
+        setp,
+        tank, outlet, inlet, amb, icoil, ipm, disc, suct, ocoil,
+        acv, acc, dcv, eev, freq,
+        ms.faults_valid ? "true" : "false",
+        (unsigned)ms.fault_run, (unsigned)ms.fault_ee, (unsigned)ms.fault_comp,
+        (unsigned)ms.fault_elec, (unsigned)ms.fault_ref,
+        fault_text);
+
+    return httpd_resp_send(req, buf, strlen(buf));
+}
+
+// ---------------------------------------------------------------------------
 // GET /api/commands — recent fc=0x06 controller command frames (power/mode/
 // setpoint). dir 0xF0 = controller->unit, 0x0F = unit->controller echo.
 // ---------------------------------------------------------------------------
@@ -872,6 +970,7 @@ esp_err_t init()
         { "/api/status",         HTTP_GET,    handle_status,          nullptr },
         { "/api/log",            HTTP_GET,    handle_log,             nullptr },
         { "/api/registers",      HTTP_GET,    handle_registers,       nullptr },
+        { "/api/state",          HTTP_GET,    handle_state,           nullptr },
         { "/api/commands",       HTTP_GET,    handle_commands,        nullptr },
         { "/api/snapshot/clear", HTTP_POST,   handle_snapshot_clear,  nullptr },
         { "/api/baud",           HTTP_GET,    handle_baud,            nullptr },
