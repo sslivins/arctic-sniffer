@@ -162,7 +162,8 @@ table.unk td.num { text-align: right; color: var(--yellow); }
     </div>
     <div class="stats">
         <span>Frames: <b id="statFrames">0</b></span>
-        <span>CRC Err: <b id="statCrc">0</b></span>
+        <span title="Genuinely malformed/unpaired frames (was mislabeled &quot;CRC Err&quot;). Should stay ~0.">Parse Err: <b id="statParseErr">0</b></span>
+        <span title="Benign inter-frame bytes discarded during resync (e.g. half-duplex line turnaround). Not errors.">Resync Bytes: <b id="statResync">0</b></span>
         <span>Txns: <b id="statTxn">0</b></span>
     </div>
     <button onclick="clearLog()" title="Clear display">🧹</button>
@@ -374,7 +375,8 @@ async function pollStatus() {
         const r = await fetch('/api/status');
         const s = await r.json();
         document.getElementById('statFrames').textContent = s.frames;
-        document.getElementById('statCrc').textContent = s.crc_errors;
+        document.getElementById('statParseErr').textContent = s.parse_errors ?? s.crc_errors ?? 0;
+        document.getElementById('statResync').textContent = s.resync_bytes ?? 0;
         document.getElementById('statTxn').textContent = s.transactions;
         if (s.version) document.getElementById('verLabel').textContent = 'v' + s.version;
         if (s.recording) {

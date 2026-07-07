@@ -35,8 +35,37 @@ constexpr uint8_t RX_TOUT_THRESH = 40;  // hardware TOUT in bit-times
 
 static TransactionCallback s_callback;
 static std::atomic<uint32_t> s_frame_count{0};
-static std::atomic<uint32_t> s_crc_errors{0};   // now: framing/sanity rejects
+// Genuinely malformed / unpaired frames: parse or checksum failures, insane
+// lengths, and orphan responses. This is what was historically (and
+// misleadingly) surfaced as "crc_errors" even though the RS-485 bus is clean
+// and frame checksums pass — in practice this stays at ~0.
+static std::atomic<uint32_t> s_parse_errors{0};
+// Benign inter-frame bytes discarded during resync — e.g. the half-duplex
+// line-turnaround byte between a response and the next request. NOT errors;
+// see the s_skipped_val capture below for what they actually are.
+static std::atomic<uint32_t> s_resync_bytes{0};
 static std::atomic<uint32_t> s_txn_count{0};
+
+// Ring buffer capturing the actual raw bytes we discard during resync, so we
+// can identify what the stray inter-frame bytes really are (value + capture
+// time). Newest entries overwrite oldest once full.
+constexpr size_t SKIPPED_RING_SZ = 256;
+static uint8_t   s_skipped_val[SKIPPED_RING_SZ];
+static int64_t   s_skipped_ms[SKIPPED_RING_SZ];
+static size_t    s_skipped_head  = 0;   // next write slot
+static uint32_t  s_skipped_total = 0;   // total bytes ever captured
+
+/// Zero all live counters and the skipped-byte capture (used on init and
+/// whenever UART parameters change to give a clean baseline).
+static void reset_counters()
+{
+    s_frame_count.store(0, std::memory_order_relaxed);
+    s_parse_errors.store(0, std::memory_order_relaxed);
+    s_resync_bytes.store(0, std::memory_order_relaxed);
+    s_txn_count.store(0, std::memory_order_relaxed);
+    s_skipped_head  = 0;
+    s_skipped_total = 0;
+}
 
 // UART event queue — filled by the driver ISR
 static QueueHandle_t s_uart_queue = nullptr;
@@ -195,7 +224,7 @@ static void process_frame(const uint8_t *buf, size_t len)
     auto pr = tuya_codec::parse_frame(buf, len, pf);
     if (pr != tuya_codec::ParseResult::OK) {
         ESP_LOGW(TAG, "Frame parse failed: code=%d", (int)pr);
-        s_crc_errors.fetch_add(1, std::memory_order_relaxed);
+        s_parse_errors.fetch_add(1, std::memory_order_relaxed);
         return;
     }
 
@@ -243,7 +272,7 @@ static void process_frame(const uint8_t *buf, size_t len)
         s_pending_field_a   != a  ||
         s_pending_field_b   != b) {
         ESP_LOGD(TAG, "Orphan response A=%u B=%u (no matching pending)", a, b);
-        s_crc_errors.fetch_add(1, std::memory_order_relaxed);
+        s_parse_errors.fetch_add(1, std::memory_order_relaxed);
         return;
     }
 
@@ -282,6 +311,19 @@ static void consume_front(size_t n)
     }
 }
 
+/// Capture raw bytes we're about to discard during resync into a ring buffer,
+/// so /api/skipped can report what the stray inter-frame bytes actually are.
+static void record_skipped(const uint8_t *buf, size_t n)
+{
+    int64_t ms = now_ms();
+    for (size_t i = 0; i < n; ++i) {
+        s_skipped_val[s_skipped_head] = buf[i];
+        s_skipped_ms[s_skipped_head]  = ms;
+        s_skipped_head = (s_skipped_head + 1) % SKIPPED_RING_SZ;
+        s_skipped_total++;
+    }
+}
+
 /// Find the next plausible frame start (`55 AA` followed by a sane header).
 /// Returns offset, or s_blob_len if not found.
 static size_t find_frame_start()
@@ -298,8 +340,9 @@ static void try_extract_frames()
             // No frame start found; drop everything except the last byte
             // (it might be the leading 0x55 of an incoming frame).
             if (s_blob_len > 1) {
-                s_crc_errors.fetch_add((uint32_t)(s_blob_len - 1),
-                                       std::memory_order_relaxed);
+                record_skipped(s_blob_buf, s_blob_len - 1);
+                s_resync_bytes.fetch_add((uint32_t)(s_blob_len - 1),
+                                         std::memory_order_relaxed);
                 consume_front(s_blob_len - 1);
             }
             return;
@@ -307,7 +350,8 @@ static void try_extract_frames()
         if (start > 0) {
             // Pre-frame garbage / leftover bytes from an unrecognised frame.
             ESP_LOGD(TAG, "Skip %u bytes before next frame", (unsigned)start);
-            s_crc_errors.fetch_add((uint32_t)start, std::memory_order_relaxed);
+            record_skipped(s_blob_buf, start);
+            s_resync_bytes.fetch_add((uint32_t)start, std::memory_order_relaxed);
             consume_front(start);
             continue;
         }
@@ -323,7 +367,7 @@ static void try_extract_frames()
             // Shouldn't happen given find_frame_start did header validation.
             ESP_LOGW(TAG, "Insane frame len %u for dir=0x%02X B=%u",
                      (unsigned)flen, dir, bb);
-            s_crc_errors.fetch_add(1, std::memory_order_relaxed);
+            s_parse_errors.fetch_add(1, std::memory_order_relaxed);
             consume_front(2);
             continue;
         }
@@ -424,10 +468,11 @@ static void sniffer_task(void *arg)
         {
             int64_t now_ms = esp_timer_get_time() / 1000;
             if ((now_ms - last_stats_ms) >= STATS_INTERVAL_MS) {
-                ESP_LOGI(TAG, "Stats: frames=%lu txn=%lu crc_err=%lu buf=%u",
+                ESP_LOGI(TAG, "Stats: frames=%lu txn=%lu parse_err=%lu resync_bytes=%lu buf=%u",
                          (unsigned long)s_frame_count.load(std::memory_order_relaxed),
                          (unsigned long)s_txn_count.load(std::memory_order_relaxed),
-                         (unsigned long)s_crc_errors.load(std::memory_order_relaxed),
+                         (unsigned long)s_parse_errors.load(std::memory_order_relaxed),
+                         (unsigned long)s_resync_bytes.load(std::memory_order_relaxed),
                          (unsigned)s_blob_len);
                 last_stats_ms = now_ms;
             }
@@ -495,8 +540,26 @@ void init(TransactionCallback cb)
 }
 
 uint32_t get_frame_count()       { return s_frame_count.load(std::memory_order_relaxed); }
-uint32_t get_crc_errors()        { return s_crc_errors.load(std::memory_order_relaxed); }
+uint32_t get_parse_errors()      { return s_parse_errors.load(std::memory_order_relaxed); }
+uint32_t get_resync_bytes()      { return s_resync_bytes.load(std::memory_order_relaxed); }
 uint32_t get_transaction_count() { return s_txn_count.load(std::memory_order_relaxed); }
+uint32_t get_skipped_total()     { return s_skipped_total; }
+
+size_t get_skipped_bytes(uint8_t *vals, int64_t *ms_out, size_t max)
+{
+    if ((!vals && !ms_out) || max == 0) return 0;
+    uint32_t total = s_skipped_total;
+    size_t   have  = (total < SKIPPED_RING_SZ) ? (size_t)total : SKIPPED_RING_SZ;
+    if (have > max) have = max;
+    // Emit oldest-first ending at the newest `have` entries.
+    size_t start = (s_skipped_head + SKIPPED_RING_SZ - have) % SKIPPED_RING_SZ;
+    for (size_t i = 0; i < have; ++i) {
+        size_t idx = (start + i) % SKIPPED_RING_SZ;
+        if (vals)   vals[i]   = s_skipped_val[idx];
+        if (ms_out) ms_out[i] = s_skipped_ms[idx];
+    }
+    return have;
+}
 
 static std::atomic<uint32_t> s_baud_rate{CONFIG_SNIFFER_UART_BAUD};
 static std::atomic<bool> s_rx_inverted{false};
@@ -530,9 +593,7 @@ bool set_baud_rate(uint32_t baud)
     uart_flush_input(port);
     s_blob_len = 0;
     s_have_pending = false;
-    s_frame_count.store(0, std::memory_order_relaxed);
-    s_crc_errors.store(0, std::memory_order_relaxed);
-    s_txn_count.store(0, std::memory_order_relaxed);
+    reset_counters();
     
     ESP_LOGI(TAG, "Baud rate changed to %lu", (unsigned long)baud);
     return true;
@@ -540,9 +601,7 @@ bool set_baud_rate(uint32_t baud)
 
 void reset_stats()
 {
-    s_frame_count.store(0, std::memory_order_relaxed);
-    s_crc_errors.store(0, std::memory_order_relaxed);
-    s_txn_count.store(0, std::memory_order_relaxed);
+    reset_counters();
 }
 
 // ---------------------------------------------------------------------------
@@ -641,9 +700,7 @@ bool set_rx_inverted(bool inverted)
     // Clear buffer and reset stats
     s_blob_len = 0;
     s_have_pending = false;
-    s_frame_count.store(0, std::memory_order_relaxed);
-    s_crc_errors.store(0, std::memory_order_relaxed);
-    s_txn_count.store(0, std::memory_order_relaxed);
+    reset_counters();
     
     ESP_LOGI(TAG, "RX signal inversion: %s", inverted ? "ENABLED" : "DISABLED");
     return true;
@@ -682,9 +739,7 @@ bool set_parity(Parity p)
     // Clear buffer and reset stats
     s_blob_len = 0;
     s_have_pending = false;
-    s_frame_count.store(0, std::memory_order_relaxed);
-    s_crc_errors.store(0, std::memory_order_relaxed);
-    s_txn_count.store(0, std::memory_order_relaxed);
+    reset_counters();
     
     ESP_LOGI(TAG, "Parity set to: %s", name);
     return true;
@@ -718,9 +773,7 @@ bool set_stop_bits(int bits)
     // Clear buffer and reset stats
     s_blob_len = 0;
     s_have_pending = false;
-    s_frame_count.store(0, std::memory_order_relaxed);
-    s_crc_errors.store(0, std::memory_order_relaxed);
-    s_txn_count.store(0, std::memory_order_relaxed);
+    reset_counters();
     
     ESP_LOGI(TAG, "Stop bits set to: %d", bits);
     return true;
