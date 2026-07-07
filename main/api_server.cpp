@@ -555,7 +555,10 @@ static esp_err_t handle_skipped(httpd_req_t *req)
     static uint16_t prevlen[256];
     static uint8_t  prevdir[256];
     static uint8_t  prevfc[256];
+    static int32_t  gap_before[256];
+    static int32_t  gap_after[256];
     size_t n = sniffer::get_skipped_bytes(vals, ms, prevlen, prevdir, prevfc,
+                                          gap_before, gap_after,
                                           sizeof(vals) / sizeof(vals[0]));
 
     char head[96];
@@ -563,12 +566,14 @@ static esp_err_t handle_skipped(httpd_req_t *req)
              (unsigned long)sniffer::get_skipped_total(), (unsigned long)n);
     httpd_resp_sendstr_chunk(req, head);
     for (size_t i = 0; i < n; ++i) {
-        char buf[160];
+        char buf[224];
         snprintf(buf, sizeof(buf),
                  "%s{\"hex\":\"0x%02X\",\"dec\":%u,\"ms\":%lld,"
-                 "\"prev_len\":%u,\"prev_dir\":\"0x%02X\",\"prev_fc\":\"0x%02X\"}",
+                 "\"prev_len\":%u,\"prev_dir\":\"0x%02X\",\"prev_fc\":\"0x%02X\","
+                 "\"gap_before_us\":%ld,\"gap_after_us\":%ld}",
                  (i == 0) ? "" : ",", vals[i], vals[i], (long long)ms[i],
-                 (unsigned)prevlen[i], prevdir[i], prevfc[i]);
+                 (unsigned)prevlen[i], prevdir[i], prevfc[i],
+                 (long)gap_before[i], (long)gap_after[i]);
         httpd_resp_sendstr_chunk(req, buf);
     }
     httpd_resp_sendstr_chunk(req, "]}");
