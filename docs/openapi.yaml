@@ -219,6 +219,22 @@ paths:
                          type: string
                          description: Function code of the preceding frame.
                          example: "0x03"
+                       gap_before_us:
+                         type: integer
+                         description: >-
+                           Microseconds between the last byte of the preceding
+                           frame and this stray byte. Small (~one char time)
+                           means the byte hugs the response tail (same
+                           transmitter, i.e. the heat pump). -1 = unknown.
+                         example: 2300
+                       gap_after_us:
+                         type: integer
+                         description: >-
+                           Microseconds between this stray byte and the first
+                           byte of the next frame. Small means the byte leads
+                           the next request (the controller drove it after an
+                           RS-485 line turnaround). -1 = unknown.
+                         example: 240000
     delete:
       operationId: clearSkipped
       summary: Reset counters and skipped-byte capture

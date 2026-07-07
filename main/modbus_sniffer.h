@@ -110,11 +110,16 @@ uint32_t get_skipped_total();
 /// Copy up to `max` most-recent skipped (resync-discarded) raw bytes into
 /// `vals` and their capture times into `ms_out`, plus the length / direction /
 /// function-code of the valid frame consumed immediately before each byte into
-/// `prevlen_out` / `prevdir_out` / `prevfc_out`. Any output pointer may be null.
-/// Bytes are written oldest-first. Returns the number written.
+/// `prevlen_out` / `prevdir_out` / `prevfc_out`, plus the inter-byte gap (us)
+/// to the preceding frame's last byte (`gap_before_out`) and to the next
+/// frame's first byte (`gap_after_out`); a gap of -1 means unknown. Any output
+/// pointer may be null. Bytes are written oldest-first. Returns the number
+/// written.
 size_t get_skipped_bytes(uint8_t *vals, int64_t *ms_out,
                          uint16_t *prevlen_out, uint8_t *prevdir_out,
-                         uint8_t *prevfc_out, size_t max);
+                         uint8_t *prevfc_out,
+                         int32_t *gap_before_out, int32_t *gap_after_out,
+                         size_t max);
 
 /// Return total transactions (paired req+resp) since init.
 uint32_t get_transaction_count();

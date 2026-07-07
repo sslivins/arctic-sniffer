@@ -59,6 +59,16 @@ static int64_t   s_skipped_ms[SKIPPED_RING_SZ];
 static uint16_t  s_skipped_prevlen[SKIPPED_RING_SZ];
 static uint8_t   s_skipped_prevdir[SKIPPED_RING_SZ];
 static uint8_t   s_skipped_prevfc[SKIPPED_RING_SZ];
+// Inter-byte timing (microseconds) around each skipped byte:
+//   gap_before = arrival(this byte) - arrival(last byte of preceding frame)
+//   gap_after  = arrival(next frame's first byte) - arrival(this byte)
+// A byte that hugs the preceding response tail (small gap_before, large
+// gap_after) was almost certainly appended by the same transmitter (the heat
+// pump). A byte that leads the next request (large gap_before, small
+// gap_after) was driven by the controller after an RS-485 line turnaround.
+// -1 means "unknown" (e.g. the reference frame edge wasn't available).
+static int32_t   s_skipped_gap_before[SKIPPED_RING_SZ];
+static int32_t   s_skipped_gap_after[SKIPPED_RING_SZ];
 static size_t    s_skipped_head  = 0;   // next write slot
 static uint32_t  s_skipped_total = 0;   // total bytes ever captured
 
@@ -66,6 +76,8 @@ static uint32_t  s_skipped_total = 0;   // total bytes ever captured
 static uint16_t  s_last_frame_len = 0;
 static uint8_t   s_last_frame_dir = 0;
 static uint8_t   s_last_frame_fc  = 0;
+// Arrival timestamp (us) of the last byte of the most recently consumed frame.
+static int64_t   s_last_frame_end_ts = 0;
 
 /// Zero all live counters and the skipped-byte capture (used on init and
 /// whenever UART parameters change to give a clean baseline).
@@ -80,6 +92,7 @@ static void reset_counters()
     s_last_frame_len = 0;
     s_last_frame_dir = 0;
     s_last_frame_fc  = 0;
+    s_last_frame_end_ts = 0;
 }
 
 // UART event queue — filled by the driver ISR
@@ -88,6 +101,10 @@ static QueueHandle_t s_uart_queue = nullptr;
 // Accumulation buffer — collects bytes until TOUT, then split into frames
 static uint8_t  s_blob_buf[MAX_BLOB];
 static size_t   s_blob_len = 0;
+// Parallel to s_blob_buf: microsecond arrival timestamp (esp_timer_get_time)
+// of each buffered byte, stamped at UART-drain time. Lets us measure the
+// inter-byte gap around a skipped byte to attribute it to a transmitter.
+static int64_t  s_blob_ts[MAX_BLOB];
 
 // Pending request (waiting for matching response). Pairing is now
 // deterministic via the dir byte: requests carry dir=0xF0, responses
@@ -322,21 +339,44 @@ static void consume_front(size_t n)
         s_blob_len = 0;
     } else {
         memmove(s_blob_buf, s_blob_buf + n, s_blob_len - n);
+        memmove(s_blob_ts,  s_blob_ts  + n, (s_blob_len - n) * sizeof(s_blob_ts[0]));
         s_blob_len -= n;
     }
 }
 
 /// Capture raw bytes we're about to discard during resync into a ring buffer,
 /// so /api/skipped can report what the stray inter-frame bytes actually are.
-static void record_skipped(const uint8_t *buf, size_t n)
+///
+/// `buf` points at the front of s_blob_buf and `ts` at the parallel front of
+/// s_blob_ts. `next_frame_ts` is the arrival timestamp of the byte immediately
+/// following the skipped run (i.e. the next frame's first byte), or <0 if it
+/// isn't known yet. These let us record the inter-byte gap on either side of
+/// each stray byte to attribute it to a transmitter.
+static void record_skipped(const uint8_t *buf, size_t n,
+                           const int64_t *ts, int64_t next_frame_ts)
 {
     int64_t ms = now_ms();
     for (size_t i = 0; i < n; ++i) {
+        int64_t byte_ts = ts ? ts[i] : 0;
+        int32_t gap_before = -1;
+        int32_t gap_after  = -1;
+        if (ts && s_last_frame_end_ts > 0 && byte_ts >= s_last_frame_end_ts) {
+            int64_t g = byte_ts - s_last_frame_end_ts;
+            gap_before = (g > INT32_MAX) ? INT32_MAX : (int32_t)g;
+        }
+        int64_t after_ref = (i + 1 < n) ? ts[i + 1] : next_frame_ts;
+        if (ts && after_ref >= 0 && after_ref >= byte_ts) {
+            int64_t g = after_ref - byte_ts;
+            gap_after = (g > INT32_MAX) ? INT32_MAX : (int32_t)g;
+        }
+
         s_skipped_val[s_skipped_head] = buf[i];
         s_skipped_ms[s_skipped_head]  = ms;
-        s_skipped_prevlen[s_skipped_head] = s_last_frame_len;
-        s_skipped_prevdir[s_skipped_head] = s_last_frame_dir;
-        s_skipped_prevfc[s_skipped_head]  = s_last_frame_fc;
+        s_skipped_prevlen[s_skipped_head]     = s_last_frame_len;
+        s_skipped_prevdir[s_skipped_head]     = s_last_frame_dir;
+        s_skipped_prevfc[s_skipped_head]      = s_last_frame_fc;
+        s_skipped_gap_before[s_skipped_head]  = gap_before;
+        s_skipped_gap_after[s_skipped_head]   = gap_after;
         s_skipped_head = (s_skipped_head + 1) % SKIPPED_RING_SZ;
         s_skipped_total++;
     }
@@ -358,7 +398,7 @@ static void try_extract_frames()
             // No frame start found; drop everything except the last byte
             // (it might be the leading 0x55 of an incoming frame).
             if (s_blob_len > 1) {
-                record_skipped(s_blob_buf, s_blob_len - 1);
+                record_skipped(s_blob_buf, s_blob_len - 1, s_blob_ts, -1);
                 s_resync_bytes.fetch_add((uint32_t)(s_blob_len - 1),
                                          std::memory_order_relaxed);
                 consume_front(s_blob_len - 1);
@@ -367,8 +407,10 @@ static void try_extract_frames()
         }
         if (start > 0) {
             // Pre-frame garbage / leftover bytes from an unrecognised frame.
+            // The byte at offset `start` is the next frame's first byte, so its
+            // timestamp bounds gap_after for the last skipped byte.
             ESP_LOGD(TAG, "Skip %u bytes before next frame", (unsigned)start);
-            record_skipped(s_blob_buf, start);
+            record_skipped(s_blob_buf, start, s_blob_ts, s_blob_ts[start]);
             s_resync_bytes.fetch_add((uint32_t)start, std::memory_order_relaxed);
             consume_front(start);
             continue;
@@ -402,6 +444,7 @@ static void try_extract_frames()
         s_last_frame_len = (uint16_t)flen;
         s_last_frame_dir = dir;
         s_last_frame_fc  = fc;
+        s_last_frame_end_ts = s_blob_ts[flen - 1];
         consume_front(flen);
     }
 }
@@ -436,8 +479,15 @@ static void sniffer_task(void *arg)
                         int got = uart_read_bytes(port,
                                                   s_blob_buf + s_blob_len,
                                                   to_read, pdMS_TO_TICKS(5));
-                        if (got > 0) s_blob_len += got;
-                        else break;
+                        if (got > 0) {
+                            int64_t ts_us = esp_timer_get_time();
+                            for (int k = 0; k < got; ++k) {
+                                s_blob_ts[s_blob_len + k] = ts_us;
+                            }
+                            s_blob_len += got;
+                        } else {
+                            break;
+                        }
                         uart_get_buffered_data_len(port, &avail);
                     }
                     // If recording, emit this burst verbatim BEFORE the
@@ -570,10 +620,12 @@ uint32_t get_skipped_total()     { return s_skipped_total; }
 
 size_t get_skipped_bytes(uint8_t *vals, int64_t *ms_out,
                          uint16_t *prevlen_out, uint8_t *prevdir_out,
-                         uint8_t *prevfc_out, size_t max)
+                         uint8_t *prevfc_out,
+                         int32_t *gap_before_out, int32_t *gap_after_out,
+                         size_t max)
 {
-    if ((!vals && !ms_out && !prevlen_out && !prevdir_out && !prevfc_out) ||
-        max == 0) {
+    if ((!vals && !ms_out && !prevlen_out && !prevdir_out && !prevfc_out &&
+         !gap_before_out && !gap_after_out) || max == 0) {
         return 0;
     }
     uint32_t total = s_skipped_total;
@@ -583,11 +635,13 @@ size_t get_skipped_bytes(uint8_t *vals, int64_t *ms_out,
     size_t start = (s_skipped_head + SKIPPED_RING_SZ - have) % SKIPPED_RING_SZ;
     for (size_t i = 0; i < have; ++i) {
         size_t idx = (start + i) % SKIPPED_RING_SZ;
-        if (vals)        vals[i]        = s_skipped_val[idx];
-        if (ms_out)      ms_out[i]      = s_skipped_ms[idx];
-        if (prevlen_out) prevlen_out[i] = s_skipped_prevlen[idx];
-        if (prevdir_out) prevdir_out[i] = s_skipped_prevdir[idx];
-        if (prevfc_out)  prevfc_out[i]  = s_skipped_prevfc[idx];
+        if (vals)           vals[i]           = s_skipped_val[idx];
+        if (ms_out)         ms_out[i]         = s_skipped_ms[idx];
+        if (prevlen_out)    prevlen_out[i]    = s_skipped_prevlen[idx];
+        if (prevdir_out)    prevdir_out[i]    = s_skipped_prevdir[idx];
+        if (prevfc_out)     prevfc_out[i]     = s_skipped_prevfc[idx];
+        if (gap_before_out) gap_before_out[i] = s_skipped_gap_before[idx];
+        if (gap_after_out)  gap_after_out[i]  = s_skipped_gap_after[idx];
     }
     return have;
 }
