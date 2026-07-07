@@ -202,6 +202,23 @@ paths:
                          format: int64
                          description: Capture time (epoch ms or uptime ms).
                          example: 1720377600123
+                       prev_len:
+                         type: integer
+                         description: >-
+                           Byte length of the last valid Tuya frame consumed
+                           immediately before this skipped byte. Use to test
+                           whether a recurring stray value (e.g. 0x14) tracks the
+                           preceding frame's length (a byte-count ack) or stays
+                           constant (a fixed heartbeat).
+                         example: 20
+                       prev_dir:
+                         type: string
+                         description: Direction byte of the preceding frame.
+                         example: "0x28"
+                       prev_fc:
+                         type: string
+                         description: Function code of the preceding frame.
+                         example: "0x03"
     delete:
       operationId: clearSkipped
       summary: Reset counters and skipped-byte capture
