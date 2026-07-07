@@ -222,7 +222,8 @@ void test_parse_bad_dir()
 void test_parse_bad_fc()
 {
     TEST("parse_bad_fc");
-    uint8_t bad[] = {0x55, 0xAA, 0xF0, 0x06, 0x00, 0x32, 0x00, 0x3A, 0x00};
+    // 0x99 is neither FC_READ (0x03) nor FC_CMD (0x06); both of those are valid.
+    uint8_t bad[] = {0x55, 0xAA, 0xF0, 0x99, 0x00, 0x32, 0x00, 0x3A, 0x00};
     tuya_codec::ParsedFrame pf{};
     CHECK(tuya_codec::parse_frame(bad, sizeof(bad), pf)
           == tuya_codec::ParseResult::BAD_FC);
@@ -231,7 +232,10 @@ void test_parse_bad_fc()
 void test_parse_unknown_window()
 {
     TEST("parse_unknown_window");
-    uint8_t bad[] = {0x55, 0xAA, 0xF0, 0x03, 0x00, 0x10, 0x00, 0x20, 0x00};
+    // Well-formed request (valid checksum 0xDC) for window (16, 32), which is
+    // not in KNOWN_WINDOWS. parse_frame is a superset: it validates framing +
+    // checksum first, then returns UNKNOWN_WINDOW for the unmapped tuple.
+    uint8_t bad[] = {0x55, 0xAA, 0xF0, 0x03, 0x00, 0x10, 0x00, 0x20, 0xDC};
     tuya_codec::ParsedFrame pf{};
     CHECK(tuya_codec::parse_frame(bad, sizeof(bad), pf)
           == tuya_codec::ParseResult::UNKNOWN_WINDOW);
@@ -269,7 +273,7 @@ void test_encode_request_rejects_bad_inputs()
     uint8_t buf[16] = {};
     CHECK(tuya_codec::encode_request(nullptr, 16, tuya_codec::FC_READ, 50, 58) == 0);
     CHECK(tuya_codec::encode_request(buf, 4, tuya_codec::FC_READ, 50, 58) == 0);
-    CHECK(tuya_codec::encode_request(buf, 16, 0x06, 50, 58) == 0);             // bad fc
+    CHECK(tuya_codec::encode_request(buf, 16, 0x99, 50, 58) == 0);             // bad fc
     CHECK(tuya_codec::encode_request(buf, 16, tuya_codec::FC_READ, 1, 1) == 0); // bad window
 }
 
@@ -324,9 +328,10 @@ void test_find_frame_start_with_garbage_prefix()
 void test_find_frame_start_skips_bad_header()
 {
     TEST("find_frame_start_skips_bad_header");
-    // 55 AA at offset 0 but FC=0x06 — should be skipped, real frame at offset 9.
+    // 55 AA at offset 0 but FC=0x99 (invalid) — should be skipped, real frame
+    // at offset 9. (0x06/FC_CMD is a *valid* fc, so it cannot be used here.)
     std::vector<uint8_t> buf =
-        {0x55, 0xAA, 0xF0, 0x06, 0x00, 0x32, 0x00, 0x3A, 0x00};
+        {0x55, 0xAA, 0xF0, 0x99, 0x00, 0x32, 0x00, 0x3A, 0x00};
     auto req = hex("55aaf0030032003aa0");
     buf.insert(buf.end(), req.begin(), req.end());
     CHECK(tuya_codec::find_frame_start(buf.data(), buf.size()) == 9);
