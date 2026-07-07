@@ -77,6 +77,31 @@ paths:
                 items:
                   $ref: "#/components/schemas/Transaction"
 
+  /api/state:
+    get:
+      operationId: getState
+      summary: Get decoded heat-pump state
+      description: |
+        Returns the current heat-pump state decoded by the on-device
+        arctic-macon library. The sniffer maintains the raw value of every
+        register seen on the wire (both the telemetry and holding windows) and
+        hands the WHOLE image to `arctic::decode_state()`, which owns the
+        register→field mapping. This endpoint only serializes the resulting
+        `MaconState`; the client performs no register decoding.
+
+        Temperature/electrical fields are `null` when their source register has
+        not yet been observed since boot or the last snapshot clear. When the
+        bus has been silent since boot, `seen` is `false` and all fields hold
+        their default (zero / "Unknown").
+      tags: [Log]
+      responses:
+        "200":
+          description: Decoded MaconState
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HeatPumpState"
+
   /api/record/start:
     post:
       operationId: startRecording
@@ -365,3 +390,77 @@ components:
           type: string
           description: Formatted value with units
           example: "25.0 °C"
+
+    HeatPumpState:
+      type: object
+      description: |
+        Heat-pump state decoded on-device by arctic::decode_state (MaconState).
+        Temperature/electrical fields are nullable — null means the source
+        register has not been observed yet.
+      properties:
+        seen:
+          type: boolean
+          description: True once at least one register has been observed on the bus.
+          example: true
+        mode:
+          type: string
+          enum: [Heating, Cooling, Unknown]
+          description: Operating direction from the reversing valve (reg2049).
+          example: Cooling
+        mode_valid:
+          type: boolean
+          example: true
+        running:
+          type: boolean
+          description: Mainboard run state (reg2007 == 0x20).
+          example: true
+        outputs:
+          type: object
+          properties:
+            compressor: { type: boolean, example: true }
+            pump:       { type: boolean, example: true }
+            fan:        { type: boolean, example: false }
+            defrost:    { type: boolean, example: false }
+        fan_level:
+          type: integer
+          description: DC fan motor speed (reg2003 A10), raw level.
+          example: 0
+        setpoint_c:
+          type: integer
+          nullable: true
+          description: Hot-water setpoint °C (reg2012).
+          example: 50
+        temperatures:
+          type: object
+          description: Whole-°C signed temperatures; each nullable.
+          properties:
+            tank:         { type: integer, nullable: true, example: 42 }
+            outlet:       { type: integer, nullable: true, example: 45 }
+            inlet:        { type: integer, nullable: true, example: 38 }
+            outdoor:      { type: integer, nullable: true, example: 22 }
+            indoor_coil:  { type: integer, nullable: true, example: 40 }
+            ipm:          { type: integer, nullable: true, example: 55 }
+            discharge:    { type: integer, nullable: true, example: 85 }
+            suction:      { type: integer, nullable: true, example: 12 }
+            outdoor_coil: { type: integer, nullable: true, example: 35 }
+        electrical:
+          type: object
+          properties:
+            ac_voltage:      { type: integer, nullable: true, example: 230 }
+            ac_current:      { type: integer, nullable: true, example: 12 }
+            dc_voltage:      { type: integer, nullable: true, example: 360 }
+            primary_eev:     { type: integer, nullable: true, example: 320 }
+            compressor_freq: { type: integer, nullable: true, example: 60 }
+        faults:
+          type: object
+          properties:
+            valid: { type: boolean, example: true }
+            run:   { type: integer, description: reg2007 raw, example: 32 }
+            ee:    { type: integer, description: reg2125 raw, example: 0 }
+            comp:  { type: integer, description: reg2126 raw, example: 0 }
+            elec:  { type: integer, description: reg2127 raw, example: 0 }
+            ref:   { type: integer, description: reg2128 raw, example: 0 }
+            text:
+              type: string
+              description: Library-decoded active-fault list, or "OK"/"—".
+              example: OK

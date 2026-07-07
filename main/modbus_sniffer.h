@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <functional>
 
+#include "macon_state.h"
+
 namespace sniffer {
 
 // ---------------------------------------------------------------------------
@@ -71,6 +73,19 @@ uint32_t get_command_count();
 /// Copy the latest raw snapshot of every register seen so far into `out`
 /// (ascending address). Returns the number written (<= max).
 size_t get_register_snapshot(RegisterSample *out, size_t max);
+
+/// Decode the latest full register image into an arctic::MaconState.
+///
+/// This is the "bulk-image → library" pattern: the sniffer maintains the raw
+/// value of every register seen on the wire (both the telemetry and holding
+/// windows) and hands the WHOLE image to the arctic-macon library, which owns
+/// the register→field mapping. Callers never cherry-pick individual registers
+/// to parse; they read decoded fields off MaconState.
+///
+/// `out` must be non-null. Returns true if at least one register has been seen
+/// since boot/clear (i.e. the decoded state reflects live bus data); false if
+/// the snapshot is still empty (all fields left at their zero/Unknown default).
+bool get_macon_state(arctic::MaconState *out);
 
 /// Copy the table of unknown registers seen so far into `out` (ascending
 /// address). Returns the number written (<= max). This table is always-on and
