@@ -48,7 +48,10 @@ paths:
               example:
                 ip: "192.168.1.42"
                 frames: 1254
-                crc_errors: 2
+                parse_errors: 0
+                resync_bytes: 623
+                skipped_total: 623
+                crc_errors: 0
                 transactions: 627
                 recording: false
                 rec_entries: 0
@@ -158,6 +161,63 @@ paths:
                     type: string
                     example: cleared
 
+  /api/skipped:
+    get:
+      operationId: getSkipped
+      summary: Raw bytes discarded during resync
+      description: >-
+        Returns the most-recent raw bytes discarded during frame resync (the
+        stray inter-frame bytes formerly counted as "crc_errors"). Useful for
+        diagnosing whether they are benign half-duplex line-turnaround bytes.
+      tags: [Status]
+      responses:
+        "200":
+          description: Captured skipped bytes (oldest-first)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:
+                   type: integer
+                   description: Total bytes ever captured since boot/clear.
+                   example: 623
+                  count:
+                   type: integer
+                   description: Number of bytes returned in this response.
+                   example: 256
+                  bytes:
+                   type: array
+                   items:
+                     type: object
+                     properties:
+                       hex:
+                         type: string
+                         example: "0x00"
+                       dec:
+                         type: integer
+                         example: 0
+                       ms:
+                         type: integer
+                         format: int64
+                         description: Capture time (epoch ms or uptime ms).
+                         example: 1720377600123
+    delete:
+      operationId: clearSkipped
+      summary: Reset counters and skipped-byte capture
+      tags: [Status]
+      responses:
+        "200":
+          description: Counters and capture cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                   type: string
+                   example: cleared
+
 components:
   schemas:
     Status:
@@ -171,10 +231,30 @@ components:
           type: integer
           description: Total Modbus frames received
           example: 1254
+        parse_errors:
+          type: integer
+          description: >-
+            Genuinely malformed or unpaired frames (parse/checksum failures,
+            insane lengths, orphan responses). Stays near zero on a clean bus.
+          example: 0
+        resync_bytes:
+          type: integer
+          description: >-
+            Benign inter-frame bytes discarded during resync (e.g. half-duplex
+            line-turnaround bytes between a response and the next request). NOT
+            errors. See GET /api/skipped for the actual byte values.
+          example: 623
+        skipped_total:
+          type: integer
+          description: Total bytes ever captured into the skipped-byte ring buffer.
+          example: 623
         crc_errors:
           type: integer
-          description: Total CRC validation failures
-          example: 2
+          deprecated: true
+          description: >-
+            Deprecated alias for parse_errors, kept for downstream compatibility.
+            The name is a misnomer — these are not CRC failures.
+          example: 0
         transactions:
           type: integer
           description: Total paired request/response transactions

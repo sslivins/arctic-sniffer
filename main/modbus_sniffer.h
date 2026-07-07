@@ -95,8 +95,22 @@ void init(TransactionCallback cb);
 /// Return total frames received since init.
 uint32_t get_frame_count();
 
-/// Return total CRC errors detected since init.
-uint32_t get_crc_errors();
+/// Return genuinely malformed / unpaired frames (parse/checksum failures,
+/// insane lengths, orphan responses) since init. This is what used to be
+/// mislabeled "crc_errors"; in practice it stays near zero.
+uint32_t get_parse_errors();
+
+/// Return the count of benign inter-frame bytes discarded during resync
+/// (e.g. half-duplex line-turnaround bytes) since init. NOT errors.
+uint32_t get_resync_bytes();
+
+/// Total bytes ever captured into the skipped-byte ring since init/clear.
+uint32_t get_skipped_total();
+
+/// Copy up to `max` most-recent skipped (resync-discarded) raw bytes into
+/// `vals` and their capture times into `ms_out` (either may be null),
+/// oldest-first. Returns the number written.
+size_t get_skipped_bytes(uint8_t *vals, int64_t *ms_out, size_t max);
 
 /// Return total transactions (paired req+resp) since init.
 uint32_t get_transaction_count();

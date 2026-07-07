@@ -156,7 +156,9 @@ static esp_err_t handle_status(httpd_req_t *req)
 
     char buf[512];
     int len = snprintf(buf, sizeof(buf),
-        "{\"version\":\"%s\",\"ip\":\"%s\",\"baud\":%lu,\"frames\":%lu,\"crc_errors\":%lu,"
+        "{\"version\":\"%s\",\"ip\":\"%s\",\"baud\":%lu,\"frames\":%lu,"
+        "\"parse_errors\":%lu,\"resync_bytes\":%lu,\"skipped_total\":%lu,"
+        "\"crc_errors\":%lu,"  // deprecated alias for parse_errors (downstream compat)
         "\"transactions\":%lu,\"recording\":%s,"
         "\"rec_entries\":%lu,"
         "\"rec_available\":%s,"
@@ -165,7 +167,10 @@ static esp_err_t handle_status(httpd_req_t *req)
         wifi::get_ip(),
         (unsigned long)sniffer::get_baud_rate(),
         (unsigned long)sniffer::get_frame_count(),
-        (unsigned long)sniffer::get_crc_errors(),
+        (unsigned long)sniffer::get_parse_errors(),
+        (unsigned long)sniffer::get_resync_bytes(),
+        (unsigned long)sniffer::get_skipped_total(),
+        (unsigned long)sniffer::get_parse_errors(),
         (unsigned long)sniffer::get_transaction_count(),
         recorder::is_recording() ? "true" : "false",
         (unsigned long)recorder::get_entry_count(),
@@ -531,8 +536,38 @@ static esp_err_t handle_unknown(httpd_req_t *req)
 }
 
 // ---------------------------------------------------------------------------
-// OTA firmware update
+// GET /api/skipped — raw bytes discarded during resync (diagnose the stray
+// inter-frame bytes). DELETE resets the capture via reset_stats().
 // ---------------------------------------------------------------------------
+
+static esp_err_t handle_skipped(httpd_req_t *req)
+{
+    set_cors(req);
+    httpd_resp_set_type(req, "application/json");
+
+    if (req->method == HTTP_DELETE) {
+        sniffer::reset_stats();
+        return httpd_resp_sendstr(req, "{\"status\":\"cleared\"}");
+    }
+
+    static uint8_t vals[256];
+    static int64_t ms[256];
+    size_t n = sniffer::get_skipped_bytes(vals, ms, sizeof(vals) / sizeof(vals[0]));
+
+    char head[96];
+    snprintf(head, sizeof(head), "{\"total\":%lu,\"count\":%lu,\"bytes\":[",
+             (unsigned long)sniffer::get_skipped_total(), (unsigned long)n);
+    httpd_resp_sendstr_chunk(req, head);
+    for (size_t i = 0; i < n; ++i) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%s{\"hex\":\"0x%02X\",\"dec\":%u,\"ms\":%lld}",
+                 (i == 0) ? "" : ",", vals[i], vals[i], (long long)ms[i]);
+        httpd_resp_sendstr_chunk(req, buf);
+    }
+    httpd_resp_sendstr_chunk(req, "]}");
+    httpd_resp_sendstr_chunk(req, nullptr);
+    return ESP_OK;
+}
 
 static const char *ota_state_str(ota_state_t s)
 {
@@ -837,6 +872,8 @@ esp_err_t init()
         { "/api/record",         HTTP_DELETE, handle_record_clear,    nullptr },
         { "/api/unknown",        HTTP_GET,    handle_unknown,         nullptr },
         { "/api/unknown",        HTTP_DELETE, handle_unknown,         nullptr },
+        { "/api/skipped",        HTTP_GET,    handle_skipped,         nullptr },
+        { "/api/skipped",        HTTP_DELETE, handle_skipped,         nullptr },
         { "/api/ota/status",     HTTP_GET,    handle_ota_status,      nullptr },
         { "/api/ota/releases",   HTTP_GET,    handle_ota_releases,    nullptr },
         { "/api/ota/github",     HTTP_POST,   handle_ota_github,      nullptr },
