@@ -263,7 +263,6 @@ table.adv-tbl td.def, table.adv-tbl td.rng { color: var(--muted); text-align: ri
         <h3>Water Loop &amp; Environment</h3>
         <div class="grid">
             <div class="metric"><span class="ml">Water Tank</span><span class="mv" id="tTank">—</span></div>
-            <div class="metric"><span class="ml">Setpoint</span><span class="mv" id="tSet">—</span></div>
             <div class="metric"><span class="ml">Outlet (supply)</span><span class="mv" id="tOutlet">—</span></div>
             <div class="metric"><span class="ml">Inlet (return)</span><span class="mv" id="tInlet">—</span></div>
             <div class="metric"><span class="ml">Outdoor Ambient</span><span class="mv" id="tOutdoor">—</span></div>
@@ -673,7 +672,6 @@ async function pollState() {
 
         // Water Loop & Environment
         setMetric('tTank', t.tank, '°C');
-        setMetric('tSet', s.setpoint_c, '°C');
         setMetric('tOutlet', t.outlet, '°C');
         setMetric('tInlet', t.inlet, '°C');
         setMetric('tOutdoor', t.outdoor, '°C');
