@@ -149,6 +149,12 @@ table.unk td.num { text-align: right; color: var(--yellow); }
     color: var(--muted); margin-bottom: 12px; font-weight: 600; }
 .hero { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
 .hero .mode { font-size: 26px; font-weight: 700; }
+.hero .mode.op-heating { color: #f97316; }
+.hero .mode.op-cooling { color: #3b82f6; }
+.hero .mode.op-defrost { color: #8b5cf6; }
+.hero .mode.op-fault   { color: #f85149; }
+.hero .mode.op-idle, .hero .mode.op-off, .hero .mode.op-unknown { color: var(--muted); }
+.hero .dir { font-size: 13px; font-weight: 600; color: var(--muted); }
 .hero .runpill { font-size: 13px; font-weight: 600; padding: 4px 14px;
     border-radius: 20px; }
 .run-on { background: rgba(63,185,80,.15); color: var(--green); }
@@ -204,7 +210,8 @@ table.unk td.num { text-align: right; color: var(--yellow); }
     <div class="card" id="liveHeroCard" style="display:none">
         <div class="hero">
             <div class="mode" id="hMode">—</div>
-            <span class="runpill run-off" id="hRun">STANDBY</span>
+            <span class="dir" id="hDir"></span>
+            <span class="runpill run-off" id="hRun">OFF</span>
             <div class="live-meta" style="margin-left:auto" id="hUpdated"></div>
         </div>
     </div>
@@ -571,10 +578,16 @@ async function pollState() {
         wait.style.display = 'none';
         cards.forEach(c => document.getElementById(c).style.display = '');
 
-        // Hero: mode + run state
-        document.getElementById('hMode').textContent = s.mode_valid ? s.mode : 'Unknown';
+        // Hero: operating state (color-coded) + reversing-valve direction + enable
+        const op = s.operation || 'Unknown';
+        const hMode = document.getElementById('hMode');
+        hMode.textContent = op;
+        hMode.className = 'mode op-' + op.toLowerCase();
+        // Direction stays visible even when the operation collapses it (Idle/Off).
+        document.getElementById('hDir').textContent =
+            s.mode_valid ? s.mode + ' direction' : '';
         const run = document.getElementById('hRun');
-        run.textContent = s.running ? 'RUNNING' : 'STANDBY';
+        run.textContent = s.running ? 'ENABLED' : 'OFF';
         run.className = 'runpill ' + (s.running ? 'run-on' : 'run-off');
         document.getElementById('hUpdated').textContent =
             'updated ' + new Date().toLocaleTimeString('en', {hour12:false});
