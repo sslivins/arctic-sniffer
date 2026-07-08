@@ -304,10 +304,10 @@ static esp_err_t handle_state(httpd_req_t *req)
         snprintf(fault_text, sizeof(fault_text), "%s", ms.faults_valid ? "OK" : "—");
     }
 
-    char buf[1200];
+    char buf[1280];
     snprintf(buf, sizeof(buf),
         "{\"seen\":%s,"
-        "\"mode\":\"%s\",\"mode_valid\":%s,\"running\":%s,"
+        "\"mode\":\"%s\",\"mode_valid\":%s,\"operation\":\"%s\",\"running\":%s,"
         "\"outputs\":{\"compressor\":%s,\"pump\":%s,\"fan\":%s,\"defrost\":%s},"
         "\"fan_level\":%u,"
         "\"setpoint_c\":%s,"
@@ -319,6 +319,7 @@ static esp_err_t handle_state(httpd_req_t *req)
         "\"text\":\"%s\"}}",
         seen ? "true" : "false",
         arctic::mode_name(ms.mode), ms.mode_valid ? "true" : "false",
+        arctic::operation_name(arctic::decode_operation(ms)),
         ms.running ? "true" : "false",
         ms.compressor_on ? "true" : "false", ms.pump_on ? "true" : "false",
         ms.fan_on ? "true" : "false", ms.defrost_on ? "true" : "false",
