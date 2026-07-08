@@ -183,6 +183,28 @@ table.unk td.num { text-align: right; color: var(--yellow); }
 .fault-bad { color: var(--red); font-weight: 600; }
 .live-meta { font-size: 11px; color: var(--muted); text-align: right; }
 .live-wait { color: var(--muted); padding: 30px; text-align: center; }
+/* --- Advanced-parameter panel (collapsible, read-only) --- */
+details.adv { padding: 0; }
+details.adv > summary { cursor: pointer; padding: 14px 16px; font-size: 11px;
+    text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+    font-weight: 600; list-style: none; }
+details.adv > summary::-webkit-details-marker { display: none; }
+details.adv > summary::before { content: '▸ '; }
+details.adv[open] > summary::before { content: '▾ '; }
+.adv-note { padding: 0 16px 10px; font-size: 11px; color: var(--muted);
+    line-height: 1.5; }
+.adv-wrap { overflow-x: auto; }
+table.adv-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.adv-tbl th, table.adv-tbl td { text-align: left; padding: 6px 10px;
+    border-top: 1px solid var(--border); white-space: nowrap; }
+table.adv-tbl th { color: var(--muted); font-weight: 600; font-size: 11px;
+    text-transform: uppercase; }
+table.adv-tbl td.nm { white-space: normal; }
+table.adv-tbl td.cn { color: var(--muted); }
+table.adv-tbl td.val { font-weight: 600; text-align: right; }
+table.adv-tbl td.val.na { color: var(--muted); font-weight: 400; }
+table.adv-tbl td.val.oor { color: var(--yellow); }
+table.adv-tbl td.def, table.adv-tbl td.rng { color: var(--muted); text-align: right; }
 </style>
 </head>
 <body>
@@ -276,6 +298,21 @@ table.unk td.num { text-align: right; color: var(--yellow); }
         <h3>Faults</h3>
         <div id="fText" class="fault-ok">—</div>
     </div>
+
+    <details class="card adv" id="advPanel">
+        <summary>Advanced Parameters (installer · Cn)</summary>
+        <div class="adv-note">Read-only. Live values sniffed from the bus using the
+            <code>reg&nbsp;20NN → Cn&nbsp;NN</code> mapping. Values outside the documented
+            range are highlighted in amber — a few register addresses carry runtime data
+            or use unknown scaling, so treat this as a diagnostic reference, not a
+            settings editor. Changing these requires the physical controller.</div>
+        <div class="adv-wrap">
+            <table class="adv-tbl">
+                <thead><tr><th>Cn</th><th>Parameter</th><th>Value</th><th>Default</th><th>Range</th></tr></thead>
+                <tbody id="advBody"><tr><td colspan="5" style="color:var(--muted);padding:10px">Open to load…</td></tr></tbody>
+            </table>
+        </div>
+    </details>
 </div>
 </div>
 
@@ -668,6 +705,82 @@ async function pollState() {
 // Poll the live view every 1.5s while it is the active tab.
 setInterval(() => { if (currentView === 'live') pollState(); }, 1500);
 pollState();
+
+// --- Advanced installer parameters (Cn) — read-only diagnostic panel ---
+// Mapping is reg(2000+Cn) -> Cn. `signed` params decode a >127 byte as
+// two's-complement (temps that can be negative). `range` uses an en-dash
+// separator so ASCII '-' stays available for negative bounds; blank range =
+// no numeric bound (enum/ratio) and is never flagged out-of-range.
+const CN_PARAMS = [
+    {cn:13, name:'Highest hot-water temperature', unit:'°C', range:'20–55', def:'50'},
+    {cn:14, name:'Freq ratio K1 (HW/heat, amb≤-9, inlet≤43)', def:'0.5'},
+    {cn:15, name:'Freq ratio K2 (HW/heat, -9<amb≤18, inlet≤43)', def:'2'},
+    {cn:16, name:'Freq ratio K3 (HW/heat, amb>18, inlet≤43)', def:'1'},
+    {cn:17, name:'Freq ratio K4 (HW/heat, amb≤-9, inlet>43)', def:'0.5'},
+    {cn:18, name:'Freq ratio K5 (HW/heat, -9<amb≤18, inlet>43)', def:'1'},
+    {cn:19, name:'Freq ratio K6 (HW/heat, amb>18, inlet>43)', def:'1'},
+    {cn:20, name:'Freq ratio K7 (cooling)', def:'2'},
+    {cn:24, name:'Heating: ambient ≥ this → compressor stop', unit:'°C', range:'10–80', def:'28'},
+    {cn:25, name:'Ambient to start backup electric heater', unit:'°C', range:'-45–45', def:'18', signed:true},
+    {cn:26, name:'Freq decrease for quiet-running mode', unit:'Hz', range:'1–20', def:'5'},
+    {cn:27, name:'Freq increase for fast-heating mode', unit:'Hz', range:'1–20', def:'5'},
+    {cn:28, name:'Auto-mode switch waiting time N', unit:'×10 min', range:'0–99', def:'3'},
+    {cn:29, name:'Compressor cumulative running time', unit:'min', range:'0–90', def:'45'},
+    {cn:30, name:'Outdoor-coil temp to ENTER defrost', unit:'°C', range:'-20–5', def:'-7', signed:true},
+    {cn:31, name:'Defrost outdoor-temperature setting', unit:'°C', range:'-20–5', def:'-10', signed:true},
+    {cn:32, name:'Outdoor↔coil temp diff to enter defrost', unit:'°C', range:'0–30', def:'10'},
+    {cn:33, name:'Extended defrost time', unit:'min', range:'0–90', def:'45'},
+    {cn:34, name:'Maximum defrost time (exit condition)', unit:'min', def:'8'},
+    {cn:35, name:'External coil temp to EXIT defrost', unit:'°C', def:'13', signed:true},
+    {cn:38, name:'Low-ambient temperature protection', unit:'°C', range:'-30–0', def:'-30', signed:true},
+    {cn:39, name:'Time at setpoint before freq reduce', unit:'min', range:'10–120', def:'40'},
+    {cn:40, name:'Cooling comp-stop |ambient| (neg = glycol)', unit:'°C', range:'-45–45', def:'15', signed:true},
+    {cn:41, name:'Main-EEV superheat control method', range:'0–1', def:'0'},
+    {cn:42, name:'Main-EEV target superheat', unit:'°C', range:'0–20', def:'5'},
+    {cn:43, name:'3-way valve-2 switch time (≠5 cancels Cn31)', unit:'min', range:'1–99', def:'5'},
+    {cn:44, name:'Water-pump mode (0=interval,1=w/comp,2=always)', range:'0–2', def:'2'},
+    {cn:45, name:'Water-pump running interval', unit:'min', range:'0–30', def:'5'},
+    {cn:46, name:'Force-pump outdoor temp (low-temp, neg=glycol)', unit:'°C', range:'-25–5', def:'-10', signed:true},
+    {cn:47, name:'Water-system cleaning function', range:'0–3', def:'0'},
+];
+
+function advOutOfRange(v, range) {
+    if (!range) return false;
+    const parts = range.split('–');
+    if (parts.length !== 2) return false;
+    const lo = parseFloat(parts[0]), hi = parseFloat(parts[1]);
+    if (isNaN(lo) || isNaN(hi)) return false;
+    return v < lo || v > hi;
+}
+
+async function loadAdvParams() {
+    const body = document.getElementById('advBody');
+    try {
+        const m = await (await fetch('/api/registers')).json();
+        body.innerHTML = CN_PARAMS.map(p => {
+            const reg = 2000 + p.cn;
+            const unit = p.unit ? ' ' + p.unit : '';
+            const def = `<td class="def">${p.def}${unit}</td>`;
+            const rng = `<td class="rng">${p.range || '—'}</td>`;
+            if (!Object.prototype.hasOwnProperty.call(m, reg)) {
+                return `<tr><td class="cn">Cn${p.cn}</td><td class="nm">${p.name}</td>`
+                     + `<td class="val na">—</td>${def}${rng}</tr>`;
+            }
+            let v = m[reg];
+            if (p.signed && v > 127) v -= 256;
+            const oor = advOutOfRange(v, p.range);
+            const cls = 'val' + (oor ? ' oor' : '');
+            const tip = oor ? ' title="outside documented range"' : '';
+            return `<tr><td class="cn">Cn${p.cn}</td><td class="nm">${p.name}</td>`
+                 + `<td class="${cls}"${tip}>${v}${unit}</td>${def}${rng}</tr>`;
+        }).join('');
+    } catch {
+        body.innerHTML = '<tr><td colspan="5" style="color:var(--red);padding:10px">Failed to read registers</td></tr>';
+    }
+}
+document.getElementById('advPanel').addEventListener('toggle', e => {
+    if (e.target.open) loadAdvParams();
+});
 
 // --- PC streaming save ---
 
