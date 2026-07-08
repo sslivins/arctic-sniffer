@@ -996,6 +996,10 @@ esp_err_t init()
     cfg.close_fn = on_close;
     cfg.lru_purge_enable = true;
     cfg.max_open_sockets = 7;
+    // Default httpd task stack is 4 KB. handle_state() builds a ~1.4 KB JSON
+    // buffer plus a MaconState and does float formatting (COP), which overruns
+    // 4 KB and crash-loops the device. 8 KB matches the captive-portal server.
+    cfg.stack_size = 8192;
 
     esp_err_t ret = httpd_start(&s_server, &cfg);
     if (ret != ESP_OK) {
