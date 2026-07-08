@@ -711,37 +711,31 @@ pollState();
 // two's-complement (temps that can be negative). `range` uses an en-dash
 // separator so ASCII '-' stays available for negative bounds; blank range =
 // no numeric bound (enum/ratio) and is never flagged out-of-range.
+// reg addresses are the VERIFIED piecewise mapping (not a uniform formula):
+//   low block  Cn13–Cn27 → reg = 1999 + Cn  (offset -1)
+//   high block Cn32–Cn47 → reg = 2000 + Cn  (offset  0)
+// Verified by exact-default matches off the live bus; freq-ratio Cn14–20 and
+// defrost-transition Cn28–31 are omitted (opaque / unresolvable on this bus).
 const CN_PARAMS = [
-    {cn:13, name:'Highest hot-water temperature', unit:'°C', range:'20–55', def:'50'},
-    {cn:14, name:'Freq ratio K1 (HW/heat, amb≤-9, inlet≤43)', def:'0.5'},
-    {cn:15, name:'Freq ratio K2 (HW/heat, -9<amb≤18, inlet≤43)', def:'2'},
-    {cn:16, name:'Freq ratio K3 (HW/heat, amb>18, inlet≤43)', def:'1'},
-    {cn:17, name:'Freq ratio K4 (HW/heat, amb≤-9, inlet>43)', def:'0.5'},
-    {cn:18, name:'Freq ratio K5 (HW/heat, -9<amb≤18, inlet>43)', def:'1'},
-    {cn:19, name:'Freq ratio K6 (HW/heat, amb>18, inlet>43)', def:'1'},
-    {cn:20, name:'Freq ratio K7 (cooling)', def:'2'},
-    {cn:24, name:'Heating: ambient ≥ this → compressor stop', unit:'°C', range:'10–80', def:'28'},
-    {cn:25, name:'Ambient to start backup electric heater', unit:'°C', range:'-45–45', def:'18', signed:true},
-    {cn:26, name:'Freq decrease for quiet-running mode', unit:'Hz', range:'1–20', def:'5'},
-    {cn:27, name:'Freq increase for fast-heating mode', unit:'Hz', range:'1–20', def:'5'},
-    {cn:28, name:'Auto-mode switch waiting time N', unit:'×10 min', range:'0–99', def:'3'},
-    {cn:29, name:'Compressor cumulative running time', unit:'min', range:'0–90', def:'45'},
-    {cn:30, name:'Outdoor-coil temp to ENTER defrost', unit:'°C', range:'-20–5', def:'-7', signed:true},
-    {cn:31, name:'Defrost outdoor-temperature setting', unit:'°C', range:'-20–5', def:'-10', signed:true},
-    {cn:32, name:'Outdoor↔coil temp diff to enter defrost', unit:'°C', range:'0–30', def:'10'},
-    {cn:33, name:'Extended defrost time', unit:'min', range:'0–90', def:'45'},
-    {cn:34, name:'Maximum defrost time (exit condition)', unit:'min', def:'8'},
-    {cn:35, name:'External coil temp to EXIT defrost', unit:'°C', def:'13', signed:true},
-    {cn:38, name:'Low-ambient temperature protection', unit:'°C', range:'-30–0', def:'-30', signed:true},
-    {cn:39, name:'Time at setpoint before freq reduce', unit:'min', range:'10–120', def:'40'},
-    {cn:40, name:'Cooling comp-stop |ambient| (neg = glycol)', unit:'°C', range:'-45–45', def:'15', signed:true},
-    {cn:41, name:'Main-EEV superheat control method', range:'0–1', def:'0'},
-    {cn:42, name:'Main-EEV target superheat', unit:'°C', range:'0–20', def:'5'},
-    {cn:43, name:'3-way valve-2 switch time (≠5 cancels Cn31)', unit:'min', range:'1–99', def:'5'},
-    {cn:44, name:'Water-pump mode (0=interval,1=w/comp,2=always)', range:'0–2', def:'2'},
-    {cn:45, name:'Water-pump running interval', unit:'min', range:'0–30', def:'5'},
-    {cn:46, name:'Force-pump outdoor temp (low-temp, neg=glycol)', unit:'°C', range:'-25–5', def:'-10', signed:true},
-    {cn:47, name:'Water-system cleaning function', range:'0–3', def:'0'},
+    {cn:13, reg:2012, name:'Highest hot-water temperature', unit:'°C', range:'20–55', def:'50'},
+    {cn:24, reg:2023, name:'Heating: ambient ≥ this → compressor stop', unit:'°C', range:'10–80', def:'28'},
+    {cn:25, reg:2024, name:'Ambient to start backup electric heater', unit:'°C', range:'-45–45', def:'18', signed:true},
+    {cn:26, reg:2025, name:'Freq decrease for quiet-running mode', unit:'Hz', range:'1–20', def:'5'},
+    {cn:27, reg:2026, name:'Freq increase for fast-heating mode', unit:'Hz', range:'1–20', def:'5'},
+    {cn:32, reg:2032, name:'Outdoor↔coil temp diff to enter defrost', unit:'°C', range:'0–30', def:'10'},
+    {cn:33, reg:2033, name:'Extended defrost time', unit:'min', range:'0–90', def:'45'},
+    {cn:34, reg:2034, name:'Maximum defrost time (exit condition)', unit:'min', def:'8'},
+    {cn:35, reg:2035, name:'External coil temp to EXIT defrost', unit:'°C', def:'13', signed:true},
+    {cn:38, reg:2038, name:'Low-ambient temperature protection', unit:'°C', range:'-30–0', def:'-30', signed:true},
+    {cn:39, reg:2039, name:'Time at setpoint before freq reduce', unit:'min', range:'10–120', def:'40'},
+    {cn:40, reg:2040, name:'Cooling comp-stop |ambient| (neg = glycol)', unit:'°C', range:'-45–45', def:'15', signed:true},
+    {cn:41, reg:2041, name:'Main-EEV superheat control method', range:'0–1', def:'0'},
+    {cn:42, reg:2042, name:'Main-EEV target superheat', unit:'°C', range:'0–20', def:'5'},
+    {cn:43, reg:2043, name:'3-way valve-2 switch time (≠5 cancels Cn31)', unit:'min', range:'1–99', def:'5'},
+    {cn:44, reg:2044, name:'Water-pump mode (0=interval,1=w/comp,2=always)', range:'0–2', def:'2'},
+    {cn:45, reg:2045, name:'Water-pump running interval', unit:'min', range:'0–30', def:'5'},
+    {cn:46, reg:2046, name:'Force-pump outdoor temp (low-temp, neg=glycol)', unit:'°C', range:'-25–5', def:'-10', signed:true},
+    {cn:47, reg:2047, name:'Water-system cleaning function', range:'0–3', def:'0'},
 ];
 
 function advOutOfRange(v, range) {
@@ -758,7 +752,7 @@ async function loadAdvParams() {
     try {
         const m = await (await fetch('/api/registers')).json();
         body.innerHTML = CN_PARAMS.map(p => {
-            const reg = 2000 + p.cn;
+            const reg = p.reg;
             const unit = p.unit ? ' ' + p.unit : '';
             const def = `<td class="def">${p.def}${unit}</td>`;
             const rng = `<td class="rng">${p.range || '—'}</td>`;
