@@ -176,6 +176,10 @@ table.unk td.num { text-align: right; color: var(--yellow); }
 .metric .mv .u { font-size: 12px; color: var(--muted); font-weight: 400;
     margin-left: 3px; }
 .metric .mv.na { color: var(--muted); }
+.metric .mv.big { font-size: 30px; }
+.cop-good { color: var(--green) !important; }
+.cop-warn { color: var(--yellow) !important; }
+.cop-bad  { color: var(--red) !important; }
 .fault-ok { color: var(--green); font-weight: 600; }
 .fault-bad { color: var(--red); font-weight: 600; }
 .live-meta { font-size: 11px; color: var(--muted); text-align: right; }
@@ -226,31 +230,47 @@ table.unk td.num { text-align: right; color: var(--yellow); }
         </div>
     </div>
 
-    <div class="card" id="liveTempCard" style="display:none">
-        <h3>Temperatures</h3>
+    <div class="card" id="livePerfCard" style="display:none">
+        <h3>Performance</h3>
+        <div class="grid">
+            <div class="metric"><span class="ml">Estimated COP</span><span class="mv big" id="cCop">—</span></div>
+            <div class="metric"><span class="ml">Thermal Output</span><span class="mv" id="cThermal">—</span></div>
+            <div class="metric"><span class="ml">Loop ΔT</span><span class="mv" id="cDt">—</span></div>
+        </div>
+    </div>
+
+    <div class="card" id="liveLoopCard" style="display:none">
+        <h3>Water Loop &amp; Environment</h3>
         <div class="grid">
             <div class="metric"><span class="ml">Water Tank</span><span class="mv" id="tTank">—</span></div>
             <div class="metric"><span class="ml">Setpoint</span><span class="mv" id="tSet">—</span></div>
             <div class="metric"><span class="ml">Outlet (supply)</span><span class="mv" id="tOutlet">—</span></div>
             <div class="metric"><span class="ml">Inlet (return)</span><span class="mv" id="tInlet">—</span></div>
             <div class="metric"><span class="ml">Outdoor Ambient</span><span class="mv" id="tOutdoor">—</span></div>
+        </div>
+    </div>
+
+    <div class="card" id="liveRefrigCard" style="display:none">
+        <h3>Refrigerant Circuit</h3>
+        <div class="grid">
+            <div class="metric"><span class="ml">Compressor Freq</span><span class="mv" id="eFreq">—</span></div>
+            <div class="metric"><span class="ml">Fan Level</span><span class="mv" id="eFan">—</span></div>
+            <div class="metric"><span class="ml">Main EEV</span><span class="mv" id="eEev">—</span></div>
             <div class="metric"><span class="ml">Discharge</span><span class="mv" id="tDisc">—</span></div>
             <div class="metric"><span class="ml">Suction</span><span class="mv" id="tSuct">—</span></div>
             <div class="metric"><span class="ml">Outdoor Coil</span><span class="mv" id="tOcoil">—</span></div>
             <div class="metric"><span class="ml">Indoor Coil</span><span class="mv" id="tIcoil">—</span></div>
-            <div class="metric"><span class="ml">IPM Module</span><span class="mv" id="tIpm">—</span></div>
         </div>
     </div>
 
-    <div class="card" id="liveElecCard" style="display:none">
-        <h3>Electrical</h3>
+    <div class="card" id="livePowerCard" style="display:none">
+        <h3>Power</h3>
         <div class="grid">
-            <div class="metric"><span class="ml">Compressor Freq</span><span class="mv" id="eFreq">—</span></div>
-            <div class="metric"><span class="ml">Fan Level</span><span class="mv" id="eFan">—</span></div>
             <div class="metric"><span class="ml">AC Voltage</span><span class="mv" id="eAcv">—</span></div>
             <div class="metric"><span class="ml">AC Current</span><span class="mv" id="eAcc">—</span></div>
+            <div class="metric"><span class="ml">Real-time Power</span><span class="mv" id="eRtp">—</span></div>
             <div class="metric"><span class="ml">DC Bus Voltage</span><span class="mv" id="eDcv">—</span></div>
-            <div class="metric"><span class="ml">Main EEV</span><span class="mv" id="eEev">—</span></div>
+            <div class="metric"><span class="ml">IPM Module</span><span class="mv" id="tIpm">—</span></div>
         </div>
     </div>
 
@@ -569,7 +589,7 @@ async function pollState() {
         const s = await r.json();
 
         const wait = document.getElementById('liveWait');
-        const cards = ['liveHeroCard','liveOutCard','liveTempCard','liveElecCard','liveFaultCard'];
+        const cards = ['liveHeroCard','liveOutCard','livePerfCard','liveLoopCard','liveRefrigCard','livePowerCard','liveFaultCard'];
         if (!s.seen) {
             wait.style.display = '';
             cards.forEach(c => document.getElementById(c).style.display = 'none');
@@ -598,27 +618,49 @@ async function pollState() {
         setPill('pFan', s.outputs.fan);
         setPill('pDefrost', s.outputs.defrost);
 
-        // Temperatures
+        // Performance: estimated COP + thermal output + loop dT
         const t = s.temperatures;
+        const e = s.electrical;
+        const perf = s.perf || s.performance || {};
+        const cop = document.getElementById('cCop');
+        cop.classList.remove('cop-good','cop-warn','cop-bad');
+        if (perf.cop === null || perf.cop === undefined) {
+            cop.classList.add('na');
+            cop.textContent = '—';
+        } else {
+            cop.classList.remove('na');
+            const dir = perf.cop_dir ? ` <span class="u">${perf.cop_dir}</span>` : '';
+            cop.innerHTML = perf.cop.toFixed(2) + dir;
+            cop.classList.add(perf.cop >= 3 ? 'cop-good' : (perf.cop >= 2 ? 'cop-warn' : 'cop-bad'));
+        }
+        const tw = perf.thermal_w;
+        setMetric('cThermal', (tw === null || tw === undefined) ? null : (tw / 1000).toFixed(1), 'kW');
+        const dt = (t.outlet === null || t.outlet === undefined ||
+                    t.inlet === null || t.inlet === undefined) ? null : (t.outlet - t.inlet);
+        setMetric('cDt', dt, '°C');
+
+        // Water Loop & Environment
         setMetric('tTank', t.tank, '°C');
         setMetric('tSet', s.setpoint_c, '°C');
         setMetric('tOutlet', t.outlet, '°C');
         setMetric('tInlet', t.inlet, '°C');
         setMetric('tOutdoor', t.outdoor, '°C');
+
+        // Refrigerant Circuit
+        setMetric('eFreq', e.compressor_freq, 'Hz');
+        setMetric('eFan', s.fan_level, '');
+        setMetric('eEev', e.primary_eev, 'steps');
         setMetric('tDisc', t.discharge, '°C');
         setMetric('tSuct', t.suction, '°C');
         setMetric('tOcoil', t.outdoor_coil, '°C');
         setMetric('tIcoil', t.indoor_coil, '°C');
-        setMetric('tIpm', t.ipm, '°C');
 
-        // Electrical
-        const e = s.electrical;
-        setMetric('eFreq', e.compressor_freq, 'Hz');
-        setMetric('eFan', s.fan_level, '');
+        // Power
         setMetric('eAcv', e.ac_voltage, 'V');
         setMetric('eAcc', e.ac_current, 'A');
+        setMetric('eRtp', e.realtime_power, 'W');
         setMetric('eDcv', e.dc_voltage, 'V');
-        setMetric('eEev', e.primary_eev, 'steps');
+        setMetric('tIpm', t.ipm, '°C');
 
         // Faults
         const f = document.getElementById('fText');
