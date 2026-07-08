@@ -7,6 +7,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cmath>
 #include <vector>
 #include <mutex>
 #include <algorithm>
@@ -304,7 +305,42 @@ static esp_err_t handle_state(httpd_req_t *req)
         snprintf(fault_text, sizeof(fault_text), "%s", ms.faults_valid ? "OK" : "—");
     }
 
-    char buf[1280];
+    // --- performance: thermal output + estimated COP -----------------------
+    // Loop thermal output Q = m_dot * cp * dT, using the arctic-logger's tuned
+    // constants for this install: 11 GPM design flow with 25% propylene glycol
+    // (cp 3900 J/kgK, rho 1.0145 kg/L) => ~2745.8 W per °C of loop dT. dT is
+    // signed (outlet - inlet): +ve heating the loop, -ve cooling it. COP is
+    // |Q| / real-time electrical power (reg2114), reported only when the
+    // compressor is actually drawing (>= 200 W) and there is a non-zero dT.
+    static constexpr float LOOP_W_PER_K   = 2745.8f;
+    static constexpr float COP_MIN_INPUT_W = 200.0f;
+
+    char rtp[12], thermal[12], cop[12];
+    const char *cop_dir = "null";
+
+    if (ms.realtime_power_valid) snprintf(rtp, sizeof(rtp), "%lu", (unsigned long)ms.realtime_power_w);
+    else                         snprintf(rtp, sizeof(rtp), "null");
+
+    const bool have_dt = ms.outlet_valid && ms.inlet_valid;
+    const int  dt = have_dt ? (ms.outlet_c - ms.inlet_c) : 0;
+    long thermal_w = 0;
+    if (have_dt) {
+        thermal_w = lroundf(LOOP_W_PER_K * (float)dt);
+        snprintf(thermal, sizeof(thermal), "%ld", thermal_w);
+    } else {
+        snprintf(thermal, sizeof(thermal), "null");
+    }
+
+    if (have_dt && dt != 0 && ms.realtime_power_valid &&
+        (float)ms.realtime_power_w >= COP_MIN_INPUT_W) {
+        float c = fabsf((float)thermal_w) / (float)ms.realtime_power_w;
+        snprintf(cop, sizeof(cop), "%.2f", c);
+        cop_dir = (dt > 0) ? "\"heating\"" : "\"cooling\"";
+    } else {
+        snprintf(cop, sizeof(cop), "null");
+    }
+
+    char buf[1440];
     snprintf(buf, sizeof(buf),
         "{\"seen\":%s,"
         "\"mode\":\"%s\",\"mode_valid\":%s,\"operation\":\"%s\",\"running\":%s,"
@@ -314,7 +350,8 @@ static esp_err_t handle_state(httpd_req_t *req)
         "\"temperatures\":{\"tank\":%s,\"outlet\":%s,\"inlet\":%s,\"outdoor\":%s,"
         "\"indoor_coil\":%s,\"ipm\":%s,\"discharge\":%s,\"suction\":%s,\"outdoor_coil\":%s},"
         "\"electrical\":{\"ac_voltage\":%s,\"ac_current\":%s,\"dc_voltage\":%s,"
-        "\"primary_eev\":%s,\"compressor_freq\":%s},"
+        "\"primary_eev\":%s,\"compressor_freq\":%s,\"realtime_power\":%s},"
+        "\"performance\":{\"thermal_w\":%s,\"cop\":%s,\"cop_dir\":%s},"
         "\"faults\":{\"valid\":%s,\"run\":%u,\"ee\":%u,\"comp\":%u,\"elec\":%u,\"ref\":%u,"
         "\"text\":\"%s\"}}",
         seen ? "true" : "false",
@@ -326,7 +363,8 @@ static esp_err_t handle_state(httpd_req_t *req)
         (unsigned)ms.fan_level,
         setp,
         tank, outlet, inlet, amb, icoil, ipm, disc, suct, ocoil,
-        acv, acc, dcv, eev, freq,
+        acv, acc, dcv, eev, freq, rtp,
+        thermal, cop, cop_dir,
         ms.faults_valid ? "true" : "false",
         (unsigned)ms.fault_run, (unsigned)ms.fault_ee, (unsigned)ms.fault_comp,
         (unsigned)ms.fault_elec, (unsigned)ms.fault_ref,
