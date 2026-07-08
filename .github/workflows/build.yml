@@ -4,6 +4,8 @@ on:
     branches: [main]
     paths:
       - 'main/**'
+      - 'components/**'
+      - '.gitmodules'
       - 'tests/**'
       - 'CMakeLists.txt'
       - 'sdkconfig.defaults'
@@ -13,6 +15,8 @@ on:
     branches: [main]
     paths:
       - 'main/**'
+      - 'components/**'
+      - '.gitmodules'
       - 'tests/**'
       - 'CMakeLists.txt'
       - 'sdkconfig.defaults'
