@@ -259,12 +259,19 @@ table.adv-tbl td.def, table.adv-tbl td.rng { color: var(--muted); text-align: ri
         </div>
     </div>
 
-    <div class="card" id="liveLoopCard" style="display:none">
-        <h3>Water Loop &amp; Environment</h3>
+    <div class="card" id="liveSetpointCard" style="display:none">
+        <h3>Setpoints</h3>
         <div class="grid">
             <div class="metric"><span class="ml">Cooling Setpoint</span><span class="mv" id="tCoolSet">—</span></div>
             <div class="metric"><span class="ml">Hot Water Setpoint</span><span class="mv" id="tHotWaterSet">—</span></div>
             <div class="metric"><span class="ml">Hot Water Ceiling</span><span class="mv" id="tHotWaterCeil">—</span></div>
+            <div class="metric"><span class="ml">Aux Heat Setpoint</span><span class="mv" id="tAuxSet">—</span></div>
+        </div>
+    </div>
+
+    <div class="card" id="liveLoopCard" style="display:none">
+        <h3>Water Loop &amp; Environment</h3>
+        <div class="grid">
             <div class="metric"><span class="ml">Water Tank</span><span class="mv" id="tTank">—</span></div>
             <div class="metric"><span class="ml">Outlet (supply)</span><span class="mv" id="tOutlet">—</span></div>
             <div class="metric"><span class="ml">Inlet (return)</span><span class="mv" id="tInlet">—</span></div>
@@ -626,7 +633,7 @@ async function pollState() {
         const s = await r.json();
 
         const wait = document.getElementById('liveWait');
-        const cards = ['liveHeroCard','liveOutCard','livePerfCard','liveLoopCard','liveRefrigCard','livePowerCard','liveFaultCard'];
+        const cards = ['liveHeroCard','liveOutCard','livePerfCard','liveSetpointCard','liveLoopCard','liveRefrigCard','livePowerCard','liveFaultCard'];
         if (!s.seen) {
             wait.style.display = '';
             cards.forEach(c => document.getElementById(c).style.display = 'none');
@@ -673,10 +680,13 @@ async function pollState() {
                     t.inlet === null || t.inlet === undefined) ? null : (t.outlet - t.inlet);
         setMetric('cDt', dt, '°C');
 
-        // Water Loop & Environment
+        // Setpoints
         setMetric('tCoolSet', s.cooling_setpoint_c, '°C');
         setMetric('tHotWaterSet', s.setpoint_c, '°C');
         setMetric('tHotWaterCeil', s.hot_water_ceiling_c, '°C');
+        setMetric('tAuxSet', s.aux_heat_setpoint_c, '°C');
+
+        // Water Loop & Environment
         setMetric('tTank', t.tank, '°C');
         setMetric('tOutlet', t.outlet, '°C');
         setMetric('tInlet', t.inlet, '°C');
