@@ -76,8 +76,8 @@ void test_find_window()
     TEST("find_window");
     auto *w0 = tuya_codec::find_window(0, 50);
     CHECK(w0 != nullptr);
-    CHECK(w0->reg_base == 2100);
-    CHECK(w0->prefix_len == 7);
+    CHECK(w0->reg_base == 2093);
+    CHECK(w0->prefix_len == 0);
 
     auto *w1 = tuya_codec::find_window(50, 58);
     CHECK(w1 != nullptr);
@@ -160,8 +160,9 @@ void test_parse_response_telemetry_window()
 {
     TEST("parse_response_telemetry_window");
     // Response half of capture line 3 (A=0, B=50). Captured length is 60 bytes
-    // (1 trailing idle byte); frame itself is 59. Validates the (0,50) window
-    // and the 7-byte static prefix.
+    // (1 trailing idle byte); frame itself is 59. Validates the (0,50) window.
+    // byte0 (0x0C here) = reg2093 cooling setpoint; the leading bytes are NOT a
+    // static prefix (prefix_len is now 0).
     auto resp = hex(
         "55aa0f03000000320a28320501000f1e17060911230020231e2800000c0001000000"
         "000000000060000000000000000a0a0f0b0b0f0e001300e68514");
@@ -177,7 +178,8 @@ void test_parse_response_telemetry_window()
     CHECK(pf.payload != nullptr);
     CHECK(pf.payload_len == 50);
     CHECK(pf.frame_len == 59);
-    // Static 7-byte prefix: 0a 28 32 05 01 00 0f
+    // byte0 = reg2093 cooling setpoint (0x0A=10 in this capture); remaining
+    // leading bytes are live telemetry, not a static prefix.
     CHECK(pf.payload[0] == 0x0A);
     CHECK(pf.payload[1] == 0x28);
     CHECK(pf.payload[2] == 0x32);
@@ -309,6 +311,38 @@ void test_encode_response_rejects_bad_inputs()
     CHECK(tuya_codec::encode_response(buf, 128, tuya_codec::FC_READ, 1, 1, payload) == 0);
 }
 
+void test_command_frame_len_and_parse()
+{
+    TEST("command_frame_len_and_parse");
+    // fc=0x06 write request carries `count` inline data bytes; ACK has none.
+    CHECK(tuya_codec::command_frame_len(tuya_codec::DIR_REQUEST, 1)  == 10);
+    CHECK(tuya_codec::command_frame_len(tuya_codec::DIR_REQUEST, 0)  == 9);
+    CHECK(tuya_codec::command_frame_len(tuya_codec::DIR_RESPONSE, 1) == 9);
+
+    // Live setpoint write (24 C): 55 AA F0 06 00 00 00 01 18 F0.
+    auto wr = hex("55aaf0060000000118f0");
+    CHECK(wr.size() == 10);
+    tuya_codec::ParsedFrame pf{};
+    CHECK(tuya_codec::parse_frame(wr.data(), wr.size(), pf) == tuya_codec::ParseResult::OK);
+    CHECK(pf.dir == tuya_codec::DIR_REQUEST);
+    CHECK(pf.fc == tuya_codec::FC_CMD);
+    CHECK(pf.field_a == 0x0000);
+    CHECK(pf.field_b == 1);
+    CHECK(pf.frame_len == 10);
+    CHECK(pf.payload != nullptr);
+    CHECK(pf.payload_len == 1);
+    if (pf.payload) CHECK(pf.payload[0] == 0x18);
+
+    // ACK: 55 AA 0F 06 00 00 00 01 E9 — 9 bytes, no payload.
+    auto ack = hex("55aa0f0600000001e9");
+    tuya_codec::ParsedFrame pa{};
+    CHECK(tuya_codec::parse_frame(ack.data(), ack.size(), pa) == tuya_codec::ParseResult::OK);
+    CHECK(pa.fc == tuya_codec::FC_CMD);
+    CHECK(pa.frame_len == 9);
+    CHECK(pa.payload == nullptr);
+    CHECK(pa.payload_len == 0);
+}
+
 void test_find_frame_start_clean()
 {
     TEST("find_frame_start_clean");
@@ -366,6 +400,7 @@ int main()
     test_encode_request_rejects_bad_inputs();
     test_encode_response_roundtrip();
     test_encode_response_rejects_bad_inputs();
+    test_command_frame_len_and_parse();
     test_find_frame_start_clean();
     test_find_frame_start_with_garbage_prefix();
     test_find_frame_start_skips_bad_header();
