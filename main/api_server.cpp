@@ -261,7 +261,7 @@ static esp_err_t handle_state(httpd_req_t *req)
     };
 
     char tank[8], outlet[8], inlet[8], amb[8], icoil[8], ipm[8];
-    char disc[8], suct[8], ocoil[8], setp[8];
+    char disc[8], suct[8], ocoil[8], setp[8], coolsetp[8];
     char acv[8], acc[8], dcv[8], eev[8], freq[8];
     iv(tank,   sizeof(tank),   ms.water_tank_c,       ms.water_tank_valid);
     iv(outlet, sizeof(outlet), ms.outlet_c,           ms.outlet_valid);
@@ -273,6 +273,7 @@ static esp_err_t handle_state(httpd_req_t *req)
     iv(suct,   sizeof(suct),   ms.suction_c,          ms.suction_valid);
     iv(ocoil,  sizeof(ocoil),  ms.outdoor_coil_c,     ms.outdoor_coil_valid);
     iv(setp,   sizeof(setp),   ms.hot_water_setpoint, ms.hot_water_setpoint_valid);
+    iv(coolsetp, sizeof(coolsetp), ms.cooling_setpoint, ms.cooling_setpoint_valid);
     iv(acv,    sizeof(acv),    ms.ac_voltage,         ms.ac_voltage_valid);
     iv(acc,    sizeof(acc),    ms.ac_current,         ms.ac_current_valid);
     iv(dcv,    sizeof(dcv),    ms.dc_voltage,         ms.dc_voltage_valid);
@@ -347,6 +348,7 @@ static esp_err_t handle_state(httpd_req_t *req)
         "\"outputs\":{\"compressor\":%s,\"pump\":%s,\"fan\":%s,\"defrost\":%s},"
         "\"fan_level\":%u,"
         "\"setpoint_c\":%s,"
+        "\"cooling_setpoint_c\":%s,"
         "\"temperatures\":{\"tank\":%s,\"outlet\":%s,\"inlet\":%s,\"outdoor\":%s,"
         "\"indoor_coil\":%s,\"ipm\":%s,\"discharge\":%s,\"suction\":%s,\"outdoor_coil\":%s},"
         "\"electrical\":{\"ac_voltage\":%s,\"ac_current\":%s,\"dc_voltage\":%s,"
@@ -362,6 +364,7 @@ static esp_err_t handle_state(httpd_req_t *req)
         ms.fan_on ? "true" : "false", ms.defrost_on ? "true" : "false",
         (unsigned)ms.fan_level,
         setp,
+        coolsetp,
         tank, outlet, inlet, amb, icoil, ipm, disc, suct, ocoil,
         acv, acc, dcv, eev, freq, rtp,
         thermal, cop, cop_dir,
@@ -391,14 +394,30 @@ static esp_err_t handle_commands(httpd_req_t *req)
              (unsigned long)sniffer::get_command_count());
     httpd_resp_sendstr_chunk(req, head);
 
-    char buf[192];
+    char buf[256];
     for (size_t i = 0; i < n; ++i) {
+        // Hex of the inline data bytes (empty for an ACK response).
+        char dhex[sizeof(cmds[i].data) * 2 + 1];
+        dhex[0] = '\0';
+        for (size_t j = 0; j < cmds[i].data_len; ++j) {
+            snprintf(dhex + j * 2, 3, "%02X", cmds[i].data[j]);
+        }
+        // The written value: first data byte as a signed °C (setpoint writes are
+        // count=1). JSON null when there is no data (e.g. the unit's ACK).
+        char vdec[12];
+        if (cmds[i].data_len >= 1) {
+            snprintf(vdec, sizeof(vdec), "%d", (int)(int8_t)cmds[i].data[0]);
+        } else {
+            snprintf(vdec, sizeof(vdec), "null");
+        }
         snprintf(buf, sizeof(buf),
-                 "%s{\"dir\":\"0x%02X\",\"selector\":\"0x%04X\",\"value\":\"0x%04X\","
-                 "\"value_dec\":%u,\"frame\":\"55AA%02X06%04X%04X\"}",
+                 "%s{\"dir\":\"0x%02X\",\"addr\":\"0x%04X\",\"count\":%u,"
+                 "\"data\":\"%s\",\"value_dec\":%s,"
+                 "\"frame\":\"55AA%02X06%04X%04X%s\"}",
                  (i == 0) ? "" : ",",
-                 cmds[i].dir, cmds[i].selector, cmds[i].value, cmds[i].value,
-                 cmds[i].dir, cmds[i].selector, cmds[i].value);
+                 cmds[i].dir, cmds[i].selector, cmds[i].value,
+                 dhex, vdec,
+                 cmds[i].dir, cmds[i].selector, cmds[i].value, dhex);
         httpd_resp_sendstr_chunk(req, buf);
     }
     httpd_resp_sendstr_chunk(req, "]}");
@@ -606,7 +625,18 @@ static esp_err_t handle_record_download(httpd_req_t *req)
     httpd_resp_set_type(req, "application/x-ndjson");
     httpd_resp_set_hdr(req, "Content-Disposition",
                        "attachment; filename=\"capture.jsonl\"");
-    return httpd_resp_send(req, data, len);
+    // Send in bounded chunks: a single httpd_resp_send of a large recorder
+    // buffer can overrun the socket send timeout and abort the transfer, which
+    // truncated long captures. Chunked writes keep each send small.
+    constexpr size_t CHUNK = 2048;
+    size_t off = 0;
+    while (off < len) {
+        size_t n = (len - off < CHUNK) ? (len - off) : CHUNK;
+        esp_err_t e = httpd_resp_send_chunk(req, data + off, n);
+        if (e != ESP_OK) return e;
+        off += n;
+    }
+    return httpd_resp_send_chunk(req, nullptr, 0);   // terminate
 }
 
 // ---------------------------------------------------------------------------

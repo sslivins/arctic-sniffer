@@ -35,11 +35,17 @@ using TransactionCallback = std::function<void(const Transaction &txn)>;
 
 /// A captured controller command frame (fc=0x06). On the real bus the
 /// controller sends dir=0xF0 (controller -> unit); the unit may echo dir=0x0F.
+///
+/// A write REQUEST carries `count` inline data bytes (e.g. the setpoint); the
+/// unit's ACK RESPONSE echoes addr+count with no data. `data`/`data_len` hold
+/// the request's payload (0 for an ACK).
 struct CommandRec {
     int64_t  timestamp_ms;   // when captured
     uint8_t  dir;            // 0xF0 controller->unit, 0x0F unit->controller
-    uint16_t selector;       // wire field_a (command selector, e.g. 0xFFFF)
-    uint16_t value;          // wire field_b (command value, e.g. 0x0001 = ON)
+    uint16_t selector;       // wire field_a (register addr, e.g. 0x0000)
+    uint16_t value;          // wire field_b (register count, e.g. 0x0001)
+    uint8_t  data[8];        // inline data bytes of a write request
+    uint8_t  data_len;       // number of valid bytes in data[] (0 for ACK)
 };
 
 constexpr size_t COMMAND_RING_SZ = 32;
