@@ -193,7 +193,8 @@ static void track_unknown(uint16_t addr, uint8_t raw)
     }
 }
 
-static void record_command(uint8_t dir, uint16_t selector, uint16_t value)
+static void record_command(uint8_t dir, uint16_t selector, uint16_t value,
+                           const uint8_t *data, size_t data_len)
 {
     uint32_t n = s_cmd_count.fetch_add(1, std::memory_order_relaxed);
     CommandRec &rec = s_cmd_ring[n % COMMAND_RING_SZ];
@@ -201,6 +202,10 @@ static void record_command(uint8_t dir, uint16_t selector, uint16_t value)
     rec.dir          = dir;
     rec.selector     = selector;
     rec.value        = value;
+    size_t n_data = data_len;
+    if (n_data > sizeof(rec.data)) n_data = sizeof(rec.data);
+    for (size_t i = 0; i < n_data; ++i) rec.data[i] = data[i];
+    rec.data_len = (uint8_t)n_data;
 }
 
 // ---------------------------------------------------------------------------
@@ -266,11 +271,12 @@ static void process_frame(const uint8_t *buf, size_t len)
     const uint16_t b   = pf.field_b;
     const tuya_codec::RegWindow *win = pf.window;
 
-    // fc=0x06 command frame (power/mode/setpoint). No register window; the
-    // (a,b) pair is a command selector/value. Record it and return — do NOT
-    // run it through the read request/response pairing below.
+    // fc=0x06 command frame (setpoint write). No register window; field_a/b are
+    // the target register addr + count. A write REQUEST (dir=0xF0) carries the
+    // written data bytes as payload; the ACK RESPONSE (dir=0x0F) has none.
+    // Record it and return — do NOT run it through the read pairing below.
     if (fc == tuya_codec::FC_CMD) {
-        record_command(dir, a, b);
+        record_command(dir, a, b, pf.payload, pf.payload_len);
         return;
     }
 
@@ -421,7 +427,7 @@ static void try_extract_frames()
         uint8_t  fc  = s_blob_buf[3];
         uint16_t bb  = (uint16_t)(s_blob_buf[6] << 8) | s_blob_buf[7];
         size_t flen = (fc == tuya_codec::FC_CMD)
-                          ? (tuya_codec::HDR_LEN + tuya_codec::CHK_LEN)  // fixed 9
+                          ? tuya_codec::command_frame_len(dir, bb)  // write: 9+count
                           : tuya_codec::frame_total_len(dir, bb);
         if (flen == 0 || flen > tuya_codec::MAX_FRAME_LEN) {
             // Shouldn't happen given find_frame_start did header validation.
