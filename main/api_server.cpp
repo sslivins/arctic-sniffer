@@ -261,7 +261,7 @@ static esp_err_t handle_state(httpd_req_t *req)
     };
 
     char tank[8], outlet[8], inlet[8], amb[8], icoil[8], ipm[8];
-    char disc[8], suct[8], ocoil[8], setp[8], coolsetp[8];
+    char disc[8], suct[8], ocoil[8], setp[8], coolsetp[8], hwceil[8], auxsetp[8];
     char acv[8], acc[8], dcv[8], eev[8], freq[8];
     iv(tank,   sizeof(tank),   ms.water_tank_c,       ms.water_tank_valid);
     iv(outlet, sizeof(outlet), ms.outlet_c,           ms.outlet_valid);
@@ -272,8 +272,12 @@ static esp_err_t handle_state(httpd_req_t *req)
     iv(disc,   sizeof(disc),   ms.discharge_c,        ms.discharge_valid);
     iv(suct,   sizeof(suct),   ms.suction_c,          ms.suction_valid);
     iv(ocoil,  sizeof(ocoil),  ms.outdoor_coil_c,     ms.outdoor_coil_valid);
+    // setpoint_c is now the LIVE hot-water setpoint (reg2095, controller-dialed),
+    // distinct from the reg2012 Cn13 ceiling below.
     iv(setp,   sizeof(setp),   ms.hot_water_setpoint, ms.hot_water_setpoint_valid);
     iv(coolsetp, sizeof(coolsetp), ms.cooling_setpoint, ms.cooling_setpoint_valid);
+    iv(hwceil, sizeof(hwceil), ms.hot_water_ceiling,  ms.hot_water_ceiling_valid);
+    iv(auxsetp, sizeof(auxsetp), ms.aux_heat_setpoint, ms.aux_heat_setpoint_valid);
     iv(acv,    sizeof(acv),    ms.ac_voltage,         ms.ac_voltage_valid);
     iv(acc,    sizeof(acc),    ms.ac_current,         ms.ac_current_valid);
     iv(dcv,    sizeof(dcv),    ms.dc_voltage,         ms.dc_voltage_valid);
@@ -349,6 +353,8 @@ static esp_err_t handle_state(httpd_req_t *req)
         "\"fan_level\":%u,"
         "\"setpoint_c\":%s,"
         "\"cooling_setpoint_c\":%s,"
+        "\"hot_water_ceiling_c\":%s,"
+        "\"aux_heat_setpoint_c\":%s,"
         "\"temperatures\":{\"tank\":%s,\"outlet\":%s,\"inlet\":%s,\"outdoor\":%s,"
         "\"indoor_coil\":%s,\"ipm\":%s,\"discharge\":%s,\"suction\":%s,\"outdoor_coil\":%s},"
         "\"electrical\":{\"ac_voltage\":%s,\"ac_current\":%s,\"dc_voltage\":%s,"
@@ -365,6 +371,8 @@ static esp_err_t handle_state(httpd_req_t *req)
         (unsigned)ms.fan_level,
         setp,
         coolsetp,
+        hwceil,
+        auxsetp,
         tank, outlet, inlet, amb, icoil, ipm, disc, suct, ocoil,
         acv, acc, dcv, eev, freq, rtp,
         thermal, cop, cop_dir,
