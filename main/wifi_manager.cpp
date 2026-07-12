@@ -139,28 +139,20 @@ static void start_mdns()
 {
     if (mdns_init() != ESP_OK) return;
 
-    const char *base = CONFIG_MDNS_HOSTNAME;
-    char candidate[64];
-    esp_ip4_addr_t addr;
+    // Derive a deterministic, unique hostname from the last two bytes of the
+    // STA MAC (e.g. "arctic-sniffer-de9c"). This gives every board a stable,
+    // collision-free name with no boot-time probing race — important when
+    // multiple sniffers share one LAN (one per heat pump).
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    char hostname[64];
+    snprintf(hostname, sizeof(hostname), "%s-%02x%02x",
+             CONFIG_MDNS_HOSTNAME, mac[4], mac[5]);
 
-    // Try the base name first, then base-2, base-3, …
-    for (int i = 1; i <= 9; i++) {
-        if (i == 1)
-            snprintf(candidate, sizeof(candidate), "%s", base);
-        else
-            snprintf(candidate, sizeof(candidate), "%s-%d", base, i);
-
-        esp_err_t err = mdns_query_a(candidate, 250, &addr);
-        if (err == ESP_ERR_NOT_FOUND) {
-            break;  // name is available
-        }
-        ESP_LOGI(TAG, "mDNS: %s.local already taken, trying next", candidate);
-    }
-
-    mdns_hostname_set(candidate);
+    mdns_hostname_set(hostname);
     mdns_instance_name_set("Arctic Sniffer");
     mdns_service_add(nullptr, "_http", "_tcp", 80, nullptr, 0);
-    ESP_LOGI(TAG, "mDNS: %s.local", candidate);
+    ESP_LOGI(TAG, "mDNS: %s.local", hostname);
 }
 
 // ============================================================================
