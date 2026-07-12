@@ -18,7 +18,7 @@ The sniffer **never transmits** — it only listens.
 
 | Mode | Description |
 |------|-------------|
-| **Monitor** | Live web dashboard at `http://arctic-sniffer.local` showing decoded Modbus transactions streamed via WebSocket. Each transaction shows the function code, register addresses, decoded names, and human-readable values. |
+| **Monitor** | Live web dashboard at `http://arctic-sniffer-<xxxx>.local` (mDNS name; `<xxxx>` = last 2 bytes of the MAC) showing decoded Modbus transactions streamed via WebSocket. Each transaction shows the function code, register addresses, decoded names, and human-readable values. |
 | **Record** | Captures Modbus traffic to JSONL format compatible with [arctic-simulator](https://github.com/sslivins/arctic-simulator) playback mode. Recordings are buffered in memory and downloadable via the REST API. |
 
 ## Hardware
@@ -162,7 +162,10 @@ idf.py build flash monitor
 ```
 
 Once connected to WiFi the device announces itself via mDNS as
-**arctic-sniffer.local**.
+**arctic-sniffer-`<xxxx>`.local**, where `<xxxx>` is the last two bytes of the
+board's WiFi MAC (e.g. `arctic-sniffer-de9c.local`). This gives every board a
+stable, unique name so multiple sniffers can share one LAN without colliding.
+The exact name is printed to the serial log on boot (`mDNS: …`).
 
 ## REST API
 
