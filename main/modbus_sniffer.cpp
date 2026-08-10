@@ -731,6 +731,17 @@ size_t get_register_snapshot(RegisterSample *out, size_t max)
     return n;
 }
 
+bool get_register_raw(uint16_t addr, uint8_t *out)
+{
+    if (!out) return false;
+    if (addr < SNAP_BASE) return false;
+    uint16_t idx = (uint16_t)(addr - SNAP_BASE);
+    if (idx >= SNAP_SPAN) return false;
+    if (!s_snap_valid[idx]) return false;
+    *out = s_snap_raw[idx];
+    return true;
+}
+
 bool get_macon_state(arctic::MaconState *out)
 {
     if (!out) return false;
