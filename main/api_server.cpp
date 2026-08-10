@@ -1,6 +1,7 @@
 #include "api_server.h"
 #include "recorder.h"
 #include "macon_registers.h"
+#include "macon_advanced_params.h"
 #include "modbus_sniffer.h"
 #include "wifi_manager.h"
 #include "ota_manager.h"
@@ -238,7 +239,66 @@ static esp_err_t handle_registers(httpd_req_t *req)
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/state — decoded heat-pump state (arctic-macon library).
+// GET /api/advanced — advanced installer ("AP") parameters, decoded by the
+// arctic-macon library.
+//
+// The library owns the AP->wire-register map (empirically change-and-capture
+// verified) plus the signed-value decode, ranges, units, categories and
+// read-only/trigger flags. This endpoint iterates the library table in its
+// canonical category order, skips any AP whose register is unverified
+// (ADV_REG_UNKNOWN), reads the live raw byte from the sniffer snapshot and
+// asks the library to decode it. The sniffer no longer hard-codes register
+// addresses or sign handling — it just serializes what the library reports.
+// ---------------------------------------------------------------------------
+
+static esp_err_t handle_advanced(httpd_req_t *req)
+{
+    set_cors(req);
+    httpd_resp_set_type(req, "application/json");
+
+    httpd_resp_sendstr_chunk(req, "{\"params\":[");
+
+    const size_t ncat   = arctic::advanced_category_count();
+    const size_t nparam = arctic::advanced_param_count();
+    bool first = true;
+    char buf[320];
+    for (size_t c = 0; c < ncat; ++c) {
+        const char *cat = arctic::advanced_category_at(c);
+        if (!cat) continue;
+        for (size_t i = 0; i < nparam; ++i) {
+            const arctic::AdvancedParam *p = arctic::advanced_param_at(i);
+            if (!p || !p->category) continue;
+            if (strcmp(p->category, cat) != 0) continue;
+            if (p->reg == arctic::ADV_REG_UNKNOWN) continue;  // hide unverified
+
+            uint8_t raw = 0;
+            const bool seen = sniffer::get_register_raw(p->reg, &raw);
+            char valbuf[12];
+            if (seen) snprintf(valbuf, sizeof(valbuf), "%d",
+                               (int)arctic::advanced_decode_raw(p->ap, raw));
+            else      snprintf(valbuf, sizeof(valbuf), "null");
+
+            snprintf(buf, sizeof(buf),
+                     "%s{\"ap\":%u,\"reg\":%u,\"name\":\"%s\",\"category\":\"%s\","
+                     "\"value\":%s,\"min\":%d,\"max\":%d,\"def\":%d,\"unit\":\"%s\","
+                     "\"read_only\":%s,\"is_trigger\":%s}",
+                     first ? "" : ",",
+                     (unsigned)p->ap, (unsigned)p->reg,
+                     p->name ? p->name : "",
+                     p->category,
+                     valbuf,
+                     (int)p->min_val, (int)p->max_val, (int)p->default_val,
+                     p->unit ? p->unit : "",
+                     p->read_only ? "true" : "false",
+                     p->is_trigger ? "true" : "false");
+            httpd_resp_sendstr_chunk(req, buf);
+            first = false;
+        }
+    }
+
+    httpd_resp_sendstr_chunk(req, "]}");
+    return httpd_resp_send_chunk(req, nullptr, 0);
+}
 //
 // Uses the bulk-image → library pattern: sniffer::get_macon_state() feeds the
 // WHOLE captured register image to arctic::decode_state() and returns a decoded
@@ -363,7 +423,8 @@ static esp_err_t handle_state(httpd_req_t *req)
         "\"faults\":{\"valid\":%s,\"run\":%u,\"ee\":%u,\"comp\":%u,\"elec\":%u,\"ref\":%u,"
         "\"text\":\"%s\"}}",
         seen ? "true" : "false",
-        arctic::mode_name(ms.mode), ms.mode_valid ? "true" : "false",
+        arctic::working_mode_name(ms.working_mode),
+        ms.working_mode_valid ? "true" : "false",
         arctic::operation_name(arctic::decode_operation(ms)),
         ms.running ? "true" : "false",
         ms.compressor_on ? "true" : "false", ms.pump_on ? "true" : "false",
@@ -1051,6 +1112,7 @@ esp_err_t init()
         { "/api/status",         HTTP_GET,    handle_status,          nullptr },
         { "/api/log",            HTTP_GET,    handle_log,             nullptr },
         { "/api/registers",      HTTP_GET,    handle_registers,       nullptr },
+        { "/api/advanced",       HTTP_GET,    handle_advanced,        nullptr },
         { "/api/state",          HTTP_GET,    handle_state,           nullptr },
         { "/api/commands",       HTTP_GET,    handle_commands,        nullptr },
         { "/api/snapshot/clear", HTTP_POST,   handle_snapshot_clear,  nullptr },

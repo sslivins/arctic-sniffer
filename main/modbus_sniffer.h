@@ -80,6 +80,12 @@ uint32_t get_command_count();
 /// (ascending address). Returns the number written (<= max).
 size_t get_register_snapshot(RegisterSample *out, size_t max);
 
+/// Latest raw (undecoded) byte of a single register `addr`, if it has been
+/// seen on the wire since boot/clear. Returns false (and leaves `*out`
+/// untouched) if the register is outside the snapshot window or has not yet
+/// been observed.
+bool get_register_raw(uint16_t addr, uint8_t *out);
+
 /// Decode the latest full register image into an arctic::MaconState.
 ///
 /// This is the "bulk-image → library" pattern: the sniffer maintains the raw

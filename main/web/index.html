@@ -148,12 +148,20 @@ table.unk td.num { text-align: right; color: var(--yellow); }
 .card h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
     color: var(--muted); margin-bottom: 12px; font-weight: 600; }
 .hero { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.hero-state .label, .hero-selection .label {
+    display: block; font-size: 10px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .06em; font-weight: 600;
+}
 .hero .mode { font-size: 26px; font-weight: 700; }
 .hero .mode.op-heating { color: #f97316; }
 .hero .mode.op-cooling { color: #3b82f6; }
 .hero .mode.op-defrost { color: #8b5cf6; }
 .hero .mode.op-fault   { color: #f85149; }
 .hero .mode.op-idle, .hero .mode.op-off, .hero .mode.op-unknown { color: var(--muted); }
+.hero-selection {
+    padding-left: 18px; border-left: 1px solid var(--border);
+}
+.hero-selection .value { font-size: 16px; font-weight: 600; margin-top: 2px; }
 .hero .runpill { font-size: 13px; font-weight: 600; padding: 4px 14px;
     border-radius: 20px; }
 .run-on { background: rgba(63,185,80,.15); color: var(--green); }
@@ -205,6 +213,10 @@ table.adv-tbl td.val { font-weight: 600; text-align: right; }
 table.adv-tbl td.val.na { color: var(--muted); font-weight: 400; }
 table.adv-tbl td.val.oor { color: var(--yellow); }
 table.adv-tbl td.def, table.adv-tbl td.rng { color: var(--muted); text-align: right; }
+table.adv-tbl tr.adv-cat td { color: var(--fg); font-weight: 700; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.5px; background: rgba(255,255,255,0.03); }
+.adv-flag { font-size: 10px; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 4px; padding: 0 4px; margin-left: 6px; text-transform: uppercase; }
 </style>
 </head>
 <body>
@@ -234,7 +246,14 @@ table.adv-tbl td.def, table.adv-tbl td.rng { color: var(--muted); text-align: ri
 
     <div class="card" id="liveHeroCard" style="display:none">
         <div class="hero">
-            <div class="mode" id="hMode">—</div>
+            <div class="hero-state">
+                <span class="label">Actual operation</span>
+                <div class="mode" id="hMode">—</div>
+            </div>
+            <div class="hero-selection">
+                <span class="label">Mode selection</span>
+                <div class="value" id="hSelectedMode">—</div>
+            </div>
             <span class="runpill run-off" id="hRun">OFF</span>
             <div class="live-meta" style="margin-left:auto" id="hUpdated"></div>
         </div>
@@ -309,15 +328,16 @@ table.adv-tbl td.def, table.adv-tbl td.rng { color: var(--muted); text-align: ri
     </div>
 
     <details class="card adv" id="advPanel">
-        <summary>Advanced Parameters (installer · Cn)</summary>
-        <div class="adv-note">Read-only. Live values sniffed from the bus using the
-            <code>reg&nbsp;20NN → Cn&nbsp;NN</code> mapping. Values outside the documented
-            range are highlighted in amber — a few register addresses carry runtime data
-            or use unknown scaling, so treat this as a diagnostic reference, not a
-            settings editor. Changing these requires the physical controller.</div>
+        <summary>Advanced Parameters (installer · AP)</summary>
+        <div class="adv-note">Read-only. Live values are decoded by the on-device
+            <code>arctic-macon</code> library using its change-and-capture verified
+            AP&nbsp;→ register map (no hard-coded addresses). Only parameters with a
+            confirmed register are shown, grouped by category. Values outside the
+            documented range are highlighted in amber. Changing these requires the
+            physical controller.</div>
         <div class="adv-wrap">
             <table class="adv-tbl">
-                <thead><tr><th>Cn</th><th>Parameter</th><th>Value</th><th>Default</th><th>Range</th></tr></thead>
+                <thead><tr><th>AP</th><th>Parameter</th><th>Value</th><th>Default</th><th>Range</th></tr></thead>
                 <tbody id="advBody"><tr><td colspan="5" style="color:var(--muted);padding:10px">Open to load…</td></tr></tbody>
             </table>
         </div>
@@ -647,6 +667,8 @@ async function pollState() {
         const hMode = document.getElementById('hMode');
         hMode.textContent = op;
         hMode.className = 'mode op-' + op.toLowerCase();
+        document.getElementById('hSelectedMode').textContent =
+            s.mode_valid ? (s.mode || 'Unknown') : 'Unknown';
         const run = document.getElementById('hRun');
         run.textContent = s.running ? 'ENABLED' : 'OFF';
         run.className = 'runpill ' + (s.running ? 'run-on' : 'run-off');
@@ -720,70 +742,51 @@ async function pollState() {
 setInterval(() => { if (currentView === 'live') pollState(); }, 1500);
 pollState();
 
-// --- Advanced installer parameters (Cn) — read-only diagnostic panel ---
-// Mapping is reg(2000+Cn) -> Cn. `signed` params decode a >127 byte as
-// two's-complement (temps that can be negative). `range` uses an en-dash
-// separator so ASCII '-' stays available for negative bounds; blank range =
-// no numeric bound (enum/ratio) and is never flagged out-of-range.
-// reg addresses are the VERIFIED piecewise mapping (not a uniform formula):
-//   low block  Cn13–Cn27 → reg = 1999 + Cn  (offset -1)
-//   high block Cn32–Cn47 → reg = 2000 + Cn  (offset  0)
-// Verified by exact-default matches off the live bus; freq-ratio Cn14–20 and
-// defrost-transition Cn28–31 are omitted (opaque / unresolvable on this bus).
-const CN_PARAMS = [
-    {cn:13, reg:2012, name:'Highest hot-water temperature', unit:'°C', range:'20–55', def:'50'},
-    {cn:24, reg:2023, name:'Heating: ambient ≥ this → compressor stop', unit:'°C', range:'10–80', def:'28'},
-    {cn:25, reg:2024, name:'Ambient to start backup electric heater', unit:'°C', range:'-45–45', def:'18', signed:true},
-    {cn:26, reg:2025, name:'Freq decrease for quiet-running mode', unit:'Hz', range:'1–20', def:'5'},
-    {cn:27, reg:2026, name:'Freq increase for fast-heating mode', unit:'Hz', range:'1–20', def:'5'},
-    {cn:32, reg:2032, name:'Outdoor↔coil temp diff to enter defrost', unit:'°C', range:'0–30', def:'10'},
-    {cn:33, reg:2033, name:'Extended defrost time', unit:'min', range:'0–90', def:'45'},
-    {cn:34, reg:2034, name:'Maximum defrost time (exit condition)', unit:'min', def:'8'},
-    {cn:35, reg:2035, name:'External coil temp to EXIT defrost', unit:'°C', def:'13', signed:true},
-    {cn:38, reg:2038, name:'Low-ambient temperature protection', unit:'°C', range:'-30–0', def:'-30', signed:true},
-    {cn:39, reg:2039, name:'Time at setpoint before freq reduce', unit:'min', range:'10–120', def:'40'},
-    {cn:40, reg:2040, name:'Cooling comp-stop |ambient| (neg = glycol)', unit:'°C', range:'-45–45', def:'15', signed:true},
-    {cn:41, reg:2041, name:'Main-EEV superheat control method', range:'0–1', def:'0'},
-    {cn:42, reg:2042, name:'Main-EEV target superheat', unit:'°C', range:'0–20', def:'5'},
-    {cn:43, reg:2043, name:'3-way valve-2 switch time (≠5 cancels Cn31)', unit:'min', range:'1–99', def:'5'},
-    {cn:44, reg:2044, name:'Water-pump mode (0=interval,1=w/comp,2=always)', range:'0–2', def:'2'},
-    {cn:45, reg:2045, name:'Water-pump running interval', unit:'min', range:'0–30', def:'5'},
-    {cn:46, reg:2046, name:'Force-pump outdoor temp (low-temp, neg=glycol)', unit:'°C', range:'-25–5', def:'-10', signed:true},
-    {cn:47, reg:2047, name:'Water-system cleaning function', range:'0–3', def:'0'},
-];
-
-function advOutOfRange(v, range) {
-    if (!range) return false;
-    const parts = range.split('–');
-    if (parts.length !== 2) return false;
-    const lo = parseFloat(parts[0]), hi = parseFloat(parts[1]);
-    if (isNaN(lo) || isNaN(hi)) return false;
-    return v < lo || v > hi;
+// --- Advanced installer parameters (AP) — read-only diagnostic panel ---
+// Fully library-driven: GET /api/advanced returns the arctic-macon library's
+// verified AP parameters (already decoded, signed-corrected, ordered by
+// category). The browser hard-codes NO register addresses or scaling — it just
+// renders what the device reports. `value` is null when the register has not
+// yet been seen on the bus.
+function advOutOfRange(v, min, max) {
+    if (v === null || v === undefined) return false;
+    if (typeof min !== 'number' || typeof max !== 'number') return false;
+    return v < min || v > max;
 }
 
 async function loadAdvParams() {
     const body = document.getElementById('advBody');
     try {
-        const m = await (await fetch('/api/registers')).json();
-        body.innerHTML = CN_PARAMS.map(p => {
-            const reg = p.reg;
-            const unit = p.unit ? ' ' + p.unit : '';
-            const def = `<td class="def">${p.def}${unit}</td>`;
-            const rng = `<td class="rng">${p.range || '—'}</td>`;
-            if (!Object.prototype.hasOwnProperty.call(m, reg)) {
-                return `<tr><td class="cn">Cn${p.cn}</td><td class="nm">${p.name}</td>`
-                     + `<td class="val na">—</td>${def}${rng}</tr>`;
+        const data = await (await fetch('/api/advanced')).json();
+        const params = (data && data.params) || [];
+        if (!params.length) {
+            body.innerHTML = '<tr><td colspan="5" style="color:var(--muted);padding:10px">No verified advanced parameters.</td></tr>';
+            return;
+        }
+        let html = '';
+        let lastCat = null;
+        for (const p of params) {
+            if (p.category !== lastCat) {
+                html += `<tr class="adv-cat"><td colspan="5">${p.category}</td></tr>`;
+                lastCat = p.category;
             }
-            let v = m[reg];
-            if (p.signed && v > 127) v -= 256;
-            const oor = advOutOfRange(v, p.range);
-            const cls = 'val' + (oor ? ' oor' : '');
+            const unit = p.unit ? ' ' + p.unit : '';
+            const hasVal = p.value !== null && p.value !== undefined;
+            const oor = hasVal && advOutOfRange(p.value, p.min, p.max);
+            const cls = 'val' + (oor ? ' oor' : '') + (hasVal ? '' : ' na');
             const tip = oor ? ' title="outside documented range"' : '';
-            return `<tr><td class="cn">Cn${p.cn}</td><td class="nm">${p.name}</td>`
-                 + `<td class="${cls}"${tip}>${v}${unit}</td>${def}${rng}</tr>`;
-        }).join('');
+            const valTxt = hasVal ? `${p.value}${unit}` : '—';
+            const flag = p.is_trigger ? ' <span class="adv-flag">trigger</span>'
+                       : p.read_only ? ' <span class="adv-flag">read-only</span>' : '';
+            html += `<tr><td class="cn">AP${p.ap}</td>`
+                  + `<td class="nm">${p.name}${flag}</td>`
+                  + `<td class="${cls}"${tip}>${valTxt}</td>`
+                  + `<td class="def">${p.def}${unit}</td>`
+                  + `<td class="rng">${p.min}–${p.max}</td></tr>`;
+        }
+        body.innerHTML = html;
     } catch {
-        body.innerHTML = '<tr><td colspan="5" style="color:var(--red);padding:10px">Failed to read registers</td></tr>';
+        body.innerHTML = '<tr><td colspan="5" style="color:var(--red);padding:10px">Failed to read advanced parameters</td></tr>';
     }
 }
 document.getElementById('advPanel').addEventListener('toggle', e => {
