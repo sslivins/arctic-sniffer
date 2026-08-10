@@ -408,7 +408,9 @@ static esp_err_t handle_state(httpd_req_t *req)
     char buf[1440];
     snprintf(buf, sizeof(buf),
         "{\"seen\":%s,"
-        "\"mode\":\"%s\",\"mode_valid\":%s,\"operation\":\"%s\",\"running\":%s,"
+        "\"mode\":\"%s\",\"mode_valid\":%s,"
+        "\"reversing_valve_request\":\"%s\",\"reversing_valve_request_valid\":%s,"
+        "\"operation\":\"%s\",\"running\":%s,"
         "\"outputs\":{\"compressor\":%s,\"pump\":%s,\"fan\":%s,\"defrost\":%s},"
         "\"fan_level\":%u,"
         "\"setpoint_c\":%s,"
@@ -425,6 +427,8 @@ static esp_err_t handle_state(httpd_req_t *req)
         seen ? "true" : "false",
         arctic::working_mode_name(ms.working_mode),
         ms.working_mode_valid ? "true" : "false",
+        arctic::mode_name(ms.mode),
+        ms.mode_valid ? "true" : "false",
         arctic::operation_name(arctic::decode_operation(ms)),
         ms.running ? "true" : "false",
         ms.compressor_on ? "true" : "false", ms.pump_on ? "true" : "false",

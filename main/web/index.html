@@ -148,7 +148,7 @@ table.unk td.num { text-align: right; color: var(--yellow); }
 .card h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
     color: var(--muted); margin-bottom: 12px; font-weight: 600; }
 .hero { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
-.hero-state .label, .hero-selection .label {
+.hero-state .label, .hero-detail .label {
     display: block; font-size: 10px; color: var(--muted);
     text-transform: uppercase; letter-spacing: .06em; font-weight: 600;
 }
@@ -158,10 +158,10 @@ table.unk td.num { text-align: right; color: var(--yellow); }
 .hero .mode.op-defrost { color: #8b5cf6; }
 .hero .mode.op-fault   { color: #f85149; }
 .hero .mode.op-idle, .hero .mode.op-off, .hero .mode.op-unknown { color: var(--muted); }
-.hero-selection {
+.hero-detail {
     padding-left: 18px; border-left: 1px solid var(--border);
 }
-.hero-selection .value { font-size: 16px; font-weight: 600; margin-top: 2px; }
+.hero-detail .value { font-size: 16px; font-weight: 600; margin-top: 2px; }
 .hero .runpill { font-size: 13px; font-weight: 600; padding: 4px 14px;
     border-radius: 20px; }
 .run-on { background: rgba(63,185,80,.15); color: var(--green); }
@@ -250,9 +250,13 @@ table.adv-tbl tr.adv-cat td { color: var(--fg); font-weight: 700; font-size: 11p
                 <span class="label">Actual operation</span>
                 <div class="mode" id="hMode">—</div>
             </div>
-            <div class="hero-selection">
+            <div class="hero-detail">
                 <span class="label">Mode selection</span>
                 <div class="value" id="hSelectedMode">—</div>
+            </div>
+            <div class="hero-detail">
+                <span class="label">Reversing valve request</span>
+                <div class="value" id="hValveRequest">—</div>
             </div>
             <span class="runpill run-off" id="hRun">OFF</span>
             <div class="live-meta" style="margin-left:auto" id="hUpdated"></div>
@@ -669,6 +673,10 @@ async function pollState() {
         hMode.className = 'mode op-' + op.toLowerCase();
         document.getElementById('hSelectedMode').textContent =
             s.mode_valid ? (s.mode || 'Unknown') : 'Unknown';
+        document.getElementById('hValveRequest').textContent =
+            s.reversing_valve_request_valid
+                ? (s.reversing_valve_request || 'Unknown')
+                : 'Unknown';
         const run = document.getElementById('hRun');
         run.textContent = s.running ? 'ENABLED' : 'OFF';
         run.className = 'runpill ' + (s.running ? 'run-on' : 'run-off');
