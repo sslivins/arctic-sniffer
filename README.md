@@ -112,16 +112,17 @@ Pump → controller (response):
        └─ dir = 0x0F (response)
 ```
 
-Tentatively decoded with `÷2` scale (**working hypothesis only** — see
-"Open questions" below):
+An early capture was tentatively decoded with a `÷2` scale. The names are
+**historical guesses**: arctic-macon now lists all five offsets as unidentified
+bytes (the real tank probe is @58), so treat this as raw data only:
 
 ```
-byte  reg   name                value
-  7   @7    Water Tank Temp     30 ÷ 2 = 15.0 °C
-  9   @9    Outlet Water Temp   raw  6 ÷ 2 =  3.0 °C
- 10   @10   Inlet Water Temp    raw  9 ÷ 2 =  4.5 °C
- 16   @16   Indoor Ambient      raw 30 ÷ 2 = 15.0 °C
- 17   @17   Outdoor Ambient     raw 40 ÷ 2 = 20.0 °C
+byte  reg   early guess         value
+  7   @7    Water Tank Temp?    30 ÷ 2 = 15.0 °C
+  9   @9    Outlet Water Temp?  raw  6 ÷ 2 =  3.0 °C
+ 10   @10   Inlet Water Temp?   raw  9 ÷ 2 =  4.5 °C
+ 16   @16   Indoor Ambient?     raw 30 ÷ 2 = 15.0 °C
+ 17   @17   Outdoor Ambient?    raw 40 ÷ 2 = 20.0 °C
 ```
 
 ### Open questions
