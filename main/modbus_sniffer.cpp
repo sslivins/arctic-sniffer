@@ -120,10 +120,34 @@ static int64_t      s_pending_uptime_ms = 0;
 // Reverse-engineering aids: raw register snapshot + fc=0x06 command ring
 // ---------------------------------------------------------------------------
 
-// Raw (undecoded) latest byte per register. Covers 2000..2199 which spans
-// both the holding (2000..2057) and telemetry (2100..2142) windows.
-constexpr uint16_t SNAP_BASE = 2000;
-constexpr uint16_t SNAP_SPAN = 200;
+// Raw (undecoded) latest byte per register, indexed by wire byte offset (@N).
+// Spans every known read window (telemetry @0..@49 + holding @50..@107).
+constexpr uint16_t SNAP_BASE = arctic::TELEMETRY_FIRST;
+
+static constexpr uint16_t snap_span()
+{
+    uint16_t end = 0;
+    for (const auto &w : tuya_codec::KNOWN_WINDOWS) {
+        uint16_t e = (uint16_t)(w.field_a + w.field_b - w.prefix_len);
+        if (e > end) end = e;
+    }
+    return (uint16_t)(end - SNAP_BASE);
+}
+constexpr uint16_t SNAP_SPAN = snap_span();
+static_assert(SNAP_BASE + SNAP_SPAN >= arctic::TELEMETRY_FIRST + arctic::TELEMETRY_COUNT,
+              "snapshot must cover the telemetry window");
+static_assert(SNAP_BASE + SNAP_SPAN >= arctic::HOLDING_FIRST + arctic::HOLDING_COUNT,
+              "snapshot must cover the holding window");
+
+// Map a wire offset to a snapshot index. The unsigned wrap rejects
+// addr < SNAP_BASE without a tautological (SNAP_BASE == 0) comparison.
+static inline bool snap_index(uint16_t addr, uint16_t *idx)
+{
+    uint32_t i = (uint32_t)addr - SNAP_BASE;
+    if (i >= SNAP_SPAN) return false;
+    *idx = (uint16_t)i;
+    return true;
+}
 static uint8_t  s_snap_raw[SNAP_SPAN]   = {0};
 static bool     s_snap_valid[SNAP_SPAN] = {false};
 
@@ -134,9 +158,8 @@ static int64_t now_ms();  // defined below
 
 static void snapshot_store(uint16_t addr, uint8_t raw)
 {
-    if (addr < SNAP_BASE) return;
-    uint16_t idx = (uint16_t)(addr - SNAP_BASE);
-    if (idx >= SNAP_SPAN) return;
+    uint16_t idx;
+    if (!snap_index(addr, &idx)) return;
     s_snap_raw[idx]   = raw;
     s_snap_valid[idx] = true;
 }
@@ -145,7 +168,7 @@ static void snapshot_store(uint16_t addr, uint8_t raw)
 // Unknown-register tracker — always-on capture of any address the decoder has
 // no metadata for (arctic::register_lookup() == nullptr). Survives snapshot
 // clears so unexpected registers appearing while the device is left unattended
-// are recorded for later review. Indexed over the same 2000..2199 span.
+// are recorded for later review. Indexed over the same wire-offset span.
 // ---------------------------------------------------------------------------
 static uint8_t  s_unk_raw[SNAP_SPAN]     = {0};
 static bool     s_unk_valid[SNAP_SPAN]   = {false};
@@ -160,15 +183,15 @@ static void track_unknown(uint16_t addr, uint8_t raw)
     // Only track addresses the decoder doesn't recognize.
     if (arctic::register_lookup(addr) != nullptr) return;
 
-    if (addr < SNAP_BASE || (uint16_t)(addr - SNAP_BASE) >= SNAP_SPAN) {
+    uint16_t idx;
+    if (!snap_index(addr, &idx)) {
         // Out-of-span unknown address — genuinely unexpected. Log it (the
         // per-address table only covers the known span).
-        ESP_LOGW(TAG, "Unknown register 0x%04X (%u) out of tracking span: raw=0x%02X",
-                 addr, addr, raw);
+        ESP_LOGW(TAG, "Unknown register @%u out of tracking span: raw=0x%02X",
+                 addr, raw);
         return;
     }
 
-    uint16_t idx = (uint16_t)(addr - SNAP_BASE);
     int64_t now = now_ms();
 
     if (!s_unk_valid[idx]) {
@@ -293,7 +316,7 @@ static void process_frame(const uint8_t *buf, size_t len)
         s_pending.timestamp_ms = now_ms();
         s_pending.slave_addr   = 0;        // not used in Tuya
         s_pending.fc           = fc;
-        s_pending.reg_addr     = win->reg_base;
+        s_pending.reg_addr     = win->field_a;   // wire offset of first data byte
         s_pending.reg_count    = (uint16_t)(b - win->prefix_len);  // arctic regs, not raw bytes
         s_pending.has_response = false;
         s_pending.error_code   = 0;
@@ -323,7 +346,7 @@ static void process_frame(const uint8_t *buf, size_t len)
     txn.has_response = true;
     txn.timestamp_ms = now_ms();
     for (size_t i = 0; i < data_bytes; ++i) {
-        uint16_t addr = (uint16_t)(win->reg_base + i);
+        uint16_t addr = (uint16_t)(win->field_a + i);
         txn.values[i] = decode_byte(data[i], addr);
         snapshot_store(addr, data[i]);   // raw byte for OFF/ON diffing
         track_unknown(addr, data[i]);    // capture registers we don't know about
@@ -734,9 +757,8 @@ size_t get_register_snapshot(RegisterSample *out, size_t max)
 bool get_register_raw(uint16_t addr, uint8_t *out)
 {
     if (!out) return false;
-    if (addr < SNAP_BASE) return false;
-    uint16_t idx = (uint16_t)(addr - SNAP_BASE);
-    if (idx >= SNAP_SPAN) return false;
+    uint16_t idx;
+    if (!snap_index(addr, &idx)) return false;
     if (!s_snap_valid[idx]) return false;
     *out = s_snap_raw[idx];
     return true;
@@ -747,7 +769,7 @@ bool get_macon_state(arctic::MaconState *out)
     if (!out) return false;
 
     // Project the raw byte snapshot into a contiguous register image spanning
-    // both wire windows (holding 2000..2057 + telemetry 2100..2142). Unseen
+    // both wire windows (telemetry @0..@49 + holding @50..@107). Unseen
     // registers stay 0. Then hand the WHOLE image to the library, which owns
     // the register→field decode — we never parse individual registers here.
     static uint16_t regs[SNAP_SPAN];

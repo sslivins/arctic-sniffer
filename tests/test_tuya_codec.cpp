@@ -76,12 +76,12 @@ void test_find_window()
     TEST("find_window");
     auto *w0 = tuya_codec::find_window(0, 50);
     CHECK(w0 != nullptr);
-    CHECK(w0->reg_base == 2093);
+    CHECK(w0->field_a == 0);
     CHECK(w0->prefix_len == 0);
 
     auto *w1 = tuya_codec::find_window(50, 58);
     CHECK(w1 != nullptr);
-    CHECK(w1->reg_base == 2000);
+    CHECK(w1->field_a == 50);
     CHECK(w1->prefix_len == 0);
 
     CHECK(tuya_codec::find_window(0, 0) == nullptr);
@@ -125,7 +125,7 @@ void test_parse_request_real_capture()
     CHECK(pf.payload_len == 0);
     CHECK(pf.frame_len == 9);
     CHECK(pf.window != nullptr);
-    CHECK(pf.window->reg_base == 2000);
+    CHECK(pf.window->field_a == 50);
 }
 
 void test_parse_response_real_capture()
@@ -161,7 +161,7 @@ void test_parse_response_telemetry_window()
     TEST("parse_response_telemetry_window");
     // Response half of capture line 3 (A=0, B=50). Captured length is 60 bytes
     // (1 trailing idle byte); frame itself is 59. Validates the (0,50) window.
-    // byte0 (0x0C here) = reg2093 cooling setpoint; the leading bytes are NOT a
+    // byte0 (0x0C here) = @0 cooling setpoint; the leading bytes are NOT a
     // static prefix (prefix_len is now 0).
     auto resp = hex(
         "55aa0f03000000320a28320501000f1e17060911230020231e2800000c0001000000"
@@ -178,7 +178,7 @@ void test_parse_response_telemetry_window()
     CHECK(pf.payload != nullptr);
     CHECK(pf.payload_len == 50);
     CHECK(pf.frame_len == 59);
-    // byte0 = reg2093 cooling setpoint (0x0A=10 in this capture); remaining
+    // byte0 = @0 cooling setpoint (0x0A=10 in this capture); remaining
     // leading bytes are live telemetry, not a static prefix.
     CHECK(pf.payload[0] == 0x0A);
     CHECK(pf.payload[1] == 0x28);

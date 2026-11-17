@@ -83,17 +83,16 @@ a **Tuya `55 AA`-style envelope** wrapping Arctic-defined fields:
 Live polling uses two `fc=0x03` reads in rotation, which together cover a
 108-byte unified page:
 
-| `addr` | `count` | Block | Arctic register range |
-|--------|---------|-------|-----------------------|
-|     0  |   50    | Telemetry / status (input regs) | 2100–2138 (+reserved) |
-|    50  |   58    | Setpoints / config (holding regs) | 2000–2057 |
+| `addr` | `count` | Block | Registers (wire byte offsets) |
+|--------|---------|-------|-------------------------------|
+|     0  |   50    | Telemetry / status | @0–@49 |
+|    50  |   58    | Setpoints / config (holding) | @50–@107 |
 
-Inside the **telemetry block**, the first **7 bytes are a static prefix**
-(`0a 28 32 05 01 00 0f` consistently) — likely device-info / framing
-metadata, contents not yet fully decoded. The first Arctic register
-(`REG_WATER_TANK_TEMP = 2100`) sits at **byte index 7**. Subsequent bytes
-correspond to consecutive Arctic input registers in the order they're
-defined in `arctic_registers.h`.
+Registers are addressed by their **wire byte offset** `@N` in this unified
+page: payload byte `k` of a read with `addr = A` is register `@(A + k)`.
+There is no prefix — byte 0 of the telemetry block is `@0` (cooling
+setpoint). Register names and decoding live in the arctic-macon library
+(`components/arctic-macon`, `macon_registers.h`).
 
 ### Example exchange
 
@@ -118,11 +117,11 @@ Tentatively decoded with `÷2` scale (**working hypothesis only** — see
 
 ```
 byte  reg   name                value
-  7   2100  Water Tank Temp     30 ÷ 2 = 15.0 °C
-  9   2102  Outlet Water Temp   raw  6 ÷ 2 =  3.0 °C
- 10   2103  Inlet Water Temp    raw  9 ÷ 2 =  4.5 °C
- 16   2109  Indoor Ambient      raw 30 ÷ 2 = 15.0 °C
- 17   2110  Outdoor Ambient     raw 40 ÷ 2 = 20.0 °C
+  7   @7    Water Tank Temp     30 ÷ 2 = 15.0 °C
+  9   @9    Outlet Water Temp   raw  6 ÷ 2 =  3.0 °C
+ 10   @10   Inlet Water Temp    raw  9 ÷ 2 =  4.5 °C
+ 16   @16   Indoor Ambient      raw 30 ÷ 2 = 15.0 °C
+ 17   @17   Outdoor Ambient     raw 40 ÷ 2 = 20.0 °C
 ```
 
 ### Open questions
@@ -137,13 +136,13 @@ byte  reg   name                value
   is truly ÷2, ÷10, or something register-specific is unverified).
   Needs on-site testing with a known-temperature reference before any
   of these values should be treated as accurate.
-- **Static 7-byte prefix in the telemetry block** — looks like device-info or
-  a Tuya-style DataPoint header (`0a 28 32 05 01 00 0f`), but the exact
-  encoding is undecoded.
+- **Leading telemetry bytes @0–@6** (`0a 28 32 05 01 00 0f` in early
+  captures) were once taken for a static prefix; they are live registers
+  (@0 = cooling setpoint), but not all of them are decoded yet.
 - **Write commands (`fc=0x06`/`0x10`)** — not seen in idle-state captures.
   Need a capture during a setpoint change to confirm they share the same
   envelope.
-- **Trailing registers 2139–2149** carry real data (e.g. byte 47 `e6` /
+- **Trailing telemetry registers @46–@49** carry real data (e.g. byte 47 `e6` /
   `0xe6`) but are not in the documented Arctic register table.
 
 ## Quick Start
@@ -192,15 +191,15 @@ One JSON object per line. Two record types co-exist:
 classic RTU frame — kept for arctic-simulator compatibility):
 
 ```jsonl
-{"t":0,"fc":3,"addr":2100,"count":39,"values":[0,1,2,...]}
-{"t":500,"fc":6,"addr":2000,"value":1}
+{"t":0,"fc":3,"addr":0,"count":50,"values":[10,40,50,...]}
+{"t":500,"fc":6,"addr":50,"value":1}
 ```
 
 | Field | Description |
 |-------|-------------|
 | `t` | Milliseconds since recording start (or boot uptime in raw mode) |
 | `fc` | Function code (3 = read holding, 6 = write single, 16 = write multiple) |
-| `addr` | Starting register address |
+| `addr` | Starting register, as a wire byte offset `@N` (telemetry @0.., holding @50..) |
 | `count` / `values` | Multi-register read/write data |
 | `value` | Single-register write |
 

@@ -321,7 +321,7 @@ static esp_err_t handle_state(httpd_req_t *req)
     };
 
     char tank[8], outlet[8], inlet[8], amb[8], icoil[8], ipm[8];
-    char disc[8], suct[8], ocoil[8], setp[8], coolsetp[8], hwceil[8], auxsetp[8];
+    char disc[8], suct[8], ocoil[8], setp[8], coolsetp[8], hwceil[8], heatsetp[8];
     char acv[8], acc[8], dcv[8], eev[8], freq[8];
     iv(tank,   sizeof(tank),   ms.water_tank_c,       ms.water_tank_valid);
     iv(outlet, sizeof(outlet), ms.outlet_c,           ms.outlet_valid);
@@ -332,12 +332,12 @@ static esp_err_t handle_state(httpd_req_t *req)
     iv(disc,   sizeof(disc),   ms.discharge_c,        ms.discharge_valid);
     iv(suct,   sizeof(suct),   ms.suction_c,          ms.suction_valid);
     iv(ocoil,  sizeof(ocoil),  ms.outdoor_coil_c,     ms.outdoor_coil_valid);
-    // setpoint_c is now the LIVE hot-water setpoint (reg2095, controller-dialed),
-    // distinct from the reg2012 Cn13 ceiling below.
+    // setpoint_c is now the LIVE hot-water setpoint (@2, controller-dialed),
+    // distinct from the @62 Cn13 ceiling below.
     iv(setp,   sizeof(setp),   ms.hot_water_setpoint, ms.hot_water_setpoint_valid);
     iv(coolsetp, sizeof(coolsetp), ms.cooling_setpoint, ms.cooling_setpoint_valid);
     iv(hwceil, sizeof(hwceil), ms.hot_water_ceiling,  ms.hot_water_ceiling_valid);
-    iv(auxsetp, sizeof(auxsetp), ms.aux_heat_setpoint, ms.aux_heat_setpoint_valid);
+    iv(heatsetp, sizeof(heatsetp), ms.heating_setpoint, ms.heating_setpoint_valid);
     iv(acv,    sizeof(acv),    ms.ac_voltage,         ms.ac_voltage_valid);
     iv(acc,    sizeof(acc),    ms.ac_current,         ms.ac_current_valid);
     iv(dcv,    sizeof(dcv),    ms.dc_voltage,         ms.dc_voltage_valid);
@@ -345,7 +345,7 @@ static esp_err_t handle_state(httpd_req_t *req)
     iv(freq,   sizeof(freq),   ms.compressor_freq,    ms.compressor_freq_valid);
 
     // Human-readable active-fault list, decoded by the library from the four
-    // fault bitfield registers (reg2125-2128). reg2007 bit5 is the run flag,
+    // fault bitfield registers (@32-@35). @57 bit5 is the run flag,
     // not a fault, so it is excluded here.
     char fault_text[224];
     fault_text[0] = '\0';
@@ -375,7 +375,7 @@ static esp_err_t handle_state(httpd_req_t *req)
     // constants for this install: 11 GPM design flow with 25% propylene glycol
     // (cp 3900 J/kgK, rho 1.0145 kg/L) => ~2745.8 W per °C of loop dT. dT is
     // signed (outlet - inlet): +ve heating the loop, -ve cooling it. COP is
-    // |Q| / real-time electrical power (reg2114), reported only when the
+    // |Q| / real-time electrical power (@21), reported only when the
     // compressor is actually drawing (>= 200 W) and there is a non-zero dT.
     static constexpr float LOOP_W_PER_K   = 2745.8f;
     static constexpr float COP_MIN_INPUT_W = 200.0f;
@@ -416,7 +416,7 @@ static esp_err_t handle_state(httpd_req_t *req)
         "\"setpoint_c\":%s,"
         "\"cooling_setpoint_c\":%s,"
         "\"hot_water_ceiling_c\":%s,"
-        "\"aux_heat_setpoint_c\":%s,"
+        "\"heating_setpoint_c\":%s,"
         "\"temperatures\":{\"tank\":%s,\"outlet\":%s,\"inlet\":%s,\"outdoor\":%s,"
         "\"indoor_coil\":%s,\"ipm\":%s,\"discharge\":%s,\"suction\":%s,\"outdoor_coil\":%s},"
         "\"electrical\":{\"ac_voltage\":%s,\"ac_current\":%s,\"dc_voltage\":%s,"
@@ -437,7 +437,7 @@ static esp_err_t handle_state(httpd_req_t *req)
         setp,
         coolsetp,
         hwceil,
-        auxsetp,
+        heatsetp,
         tank, outlet, inlet, amb, icoil, ipm, disc, suct, ocoil,
         acv, acc, dcv, eev, freq, rtp,
         thermal, cop, cop_dir,
