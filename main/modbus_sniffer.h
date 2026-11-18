@@ -52,7 +52,7 @@ constexpr size_t COMMAND_RING_SZ = 32;
 
 /// One register's latest raw (undecoded) byte as seen on the wire.
 struct RegisterSample {
-    uint16_t addr;   // Arctic register number (2000.. or 2100..)
+    uint16_t addr;   // wire byte offset @N (telemetry @0.., holding @50..)
     uint8_t  raw;    // raw byte value on the wire
 };
 

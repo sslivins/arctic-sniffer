@@ -165,8 +165,8 @@ paths:
               schema:
                 type: string
               example: |
-                {"t":0,"fc":3,"addr":2100,"count":39,"values":[0,1,2]}
-                {"t":500,"fc":6,"addr":2000,"value":1}
+                {"t":0,"fc":3,"addr":0,"count":50,"values":[10,40,50]}
+                {"t":500,"fc":6,"addr":50,"value":1}
 
   /api/record:
     delete:
@@ -355,8 +355,8 @@ components:
           example: Read Holding Registers
         addr:
           type: integer
-          description: Starting register address
-          example: 2100
+          description: Starting register, as a wire byte offset (@N; telemetry @0.., holding @50..)
+          example: 0
         count:
           type: integer
           description: Number of registers
@@ -376,8 +376,8 @@ components:
       properties:
         addr:
           type: integer
-          description: Register address
-          example: 2100
+          description: Register address, as a wire byte offset (@N)
+          example: 7
         raw:
           type: integer
           description: Raw 16-bit register value
@@ -405,14 +405,14 @@ components:
         mode:
           type: string
           enum: [Heating, Cooling, Unknown]
-          description: Operating direction from the reversing valve (reg2049).
+          description: Operating direction from the reversing valve (@99).
           example: Cooling
         mode_valid:
           type: boolean
           example: true
         running:
           type: boolean
-          description: Mainboard run state (reg2007 == 0x20).
+          description: Mainboard run state (@57 == 0x20).
           example: true
         outputs:
           type: object
@@ -423,13 +423,18 @@ components:
             defrost:    { type: boolean, example: false }
         fan_level:
           type: integer
-          description: DC fan motor speed (reg2003 A10), raw level.
+          description: DC fan motor speed (@53, A10), raw level.
           example: 0
         setpoint_c:
           type: integer
           nullable: true
-          description: Hot-water setpoint °C (reg2012).
+          description: Live hot-water setpoint °C (@2, controller-dialed).
           example: 50
+        heating_setpoint_c:
+          type: integer
+          nullable: true
+          description: Heating setpoint °C (@1, modes 1 and 2). Replaces the former aux_heat_setpoint_c.
+          example: 35
         temperatures:
           type: object
           description: Whole-°C signed temperatures; each nullable.
@@ -455,11 +460,11 @@ components:
           type: object
           properties:
             valid: { type: boolean, example: true }
-            run:   { type: integer, description: reg2007 raw, example: 32 }
-            ee:    { type: integer, description: reg2125 raw, example: 0 }
-            comp:  { type: integer, description: reg2126 raw, example: 0 }
-            elec:  { type: integer, description: reg2127 raw, example: 0 }
-            ref:   { type: integer, description: reg2128 raw, example: 0 }
+            run:   { type: integer, description: "@57 raw", example: 32 }
+            ee:    { type: integer, description: "@32 raw", example: 0 }
+            comp:  { type: integer, description: "@33 raw", example: 0 }
+            elec:  { type: integer, description: "@34 raw", example: 0 }
+            ref:   { type: integer, description: "@35 raw", example: 0 }
             text:
               type: string
               description: Library-decoded active-fault list, or "OK"/"—".

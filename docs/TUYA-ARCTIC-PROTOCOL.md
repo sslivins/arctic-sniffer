@@ -66,10 +66,14 @@ observed in eight months of captures. The codec rejects everything else
 with `UNKNOWN_WINDOW` rather than silently misinterpreting an unexpected
 poll.
 
-| `addr` | `count` | Arctic regs covered | Prefix bytes | Notes |
-|--------|---------|---------------------|--------------|-------|
-| 0      | 50      | 2100 – 2149         | 7            | Telemetry / input regs. First 7 payload bytes are a static header `0a 28 32 05 01 00 0f` — skip them. |
-| 50     | 58      | 2000 – 2057         | 0            | Holding regs (config + setpoints). No prefix. |
+| `addr` | `count` | Registers covered (wire offsets) | Prefix bytes | Notes |
+|--------|---------|----------------------------------|--------------|-------|
+| 0      | 50      | @0 – @49                         | 0            | Telemetry / status. No prefix — payload byte 0 is @0 (cooling setpoint). |
+| 50     | 58      | @50 – @107                       | 0            | Holding regs (config + setpoints). No prefix. |
+
+Registers are addressed by their **wire byte offset** `@N` in this single
+unified page (the legacy Modbus "20xx" numbering is retired). The
+register for payload byte `k` of window `w` is `w.field_a + (k - w.prefix_len)`.
 
 If new windows ever show up (e.g., writes, extended diagnostics), add
 them to `KNOWN_WINDOWS[]` in `tuya_codec.h` and update this table.
@@ -78,7 +82,7 @@ them to `KNOWN_WINDOWS[]` in `tuya_codec.h` and update this table.
 
 Each Arctic "register" on the wire is **one byte**, not the two bytes
 that classic Modbus uses. After the prefix is stripped (if any), byte
-N of the payload corresponds to `reg_base + N`. Confirmed by decoding
+N of the payload corresponds to register `@(field_a + N)`. Confirmed by decoding
 the raw `55 AA …` frames in `tests/data/capture_raw.jsonl`: telemetry
 responses are exactly `count=50` bytes and yield exactly 50 reg
 values, all within `0..255`.
@@ -91,12 +95,12 @@ in `arctic_registers.h`). Holding regs with raw values like 250, 246,
 thresholds.
 
 > ⚠️ **Multi-byte status registers — UNVALIDATED.** Earlier notes in
-> this doc claimed reg 2135 is a 16-bit bitmap based on
-> `sniff_cap3.jsonl` line 1 showing `2135 = 2355`. That file was
+> this doc claimed @42 is a 16-bit bitmap based on
+> `sniff_cap3.jsonl` line 1 showing `@42 = 2355`. That file was
 > produced by an older decoder and contains values >255 for registers
-> that raw-byte captures show as single bytes (e.g. 2122 = 1 raw, but
+> that raw-byte captures show as single bytes (e.g. @29 = 1 raw, but
 > 3200 in `sniff_cap.jsonl`). Raw-byte captures show **all of
-> 2135–2138 = 0** in an idle, fault-free system, so we have no
+> @42–@45 = 0** in an idle, fault-free system, so we have no
 > on-the-wire evidence either way for the bitmap layout. **Need a
 > fresh raw capture with at least one fault active** before adding
 > any multi-byte decoding logic.
@@ -122,13 +126,13 @@ outdoor ambient, 2026-05-03).
 
 | Range           | Scale | Confidence | Rationale |
 |-----------------|-------|------------|-----------|
-| 2100 – 2117 (temperatures) | ÷1 (raw, signed where applicable) | ✅ | Reg 2110 (outdoor coil) = 9 raw → 9 °C, fits 5–10 °C site recall. Reg 2108 (indoor coil) = 23 raw → 23 °C, normal room temp; would be implausibly cold at ÷2 (11.5 °C). |
-| 2000 – 2057 (config/setpoints) | ÷1 (signed bytes for limits) | ✅ | Reg 2003 = 45 (floor-heat target °C), reg 2004 = 55 (DHW target °C), all sensible only raw. Signed-byte limits: 2013 = 250 → −6 °C, 2029 = 246 → −10 °C, 2038 = 226 → −30 °C, 2052 = 241 → −15 °C — all reasonable defrost / low-limit thresholds. |
-| 2118 +          | per-register | ⚠️ | The V1.3 CSV claims pressures (÷10 bar) and voltages (÷10 V) in this range, but in the captured idle snapshots the only non-zero regs here are 2120=12, 2122=1, 2131=96 — too coarse to confirm or refute the ÷10 claim. Need a capture with the compressor running. |
-| 2135 – 2138 (status bitmaps) | bitmap (layout TBD) | ⚠️ | CSV claims 16-bit bitmaps with named flags; all four regs are 0 in every raw-byte capture so far. **Need a fault-active capture.** |
+| @7 – @24 (temperatures) | ÷1 (raw, signed where applicable) | ✅ | @17 (outdoor coil) = 9 raw → 9 °C, fits 5–10 °C site recall. @15 (indoor coil) = 23 raw → 23 °C, normal room temp; would be implausibly cold at ÷2 (11.5 °C). |
+| @50 – @107 (config/setpoints) | ÷1 (signed bytes for limits) | ✅ | @53 = 45 (floor-heat target °C), @54 = 55 (DHW target °C), all sensible only raw. Signed-byte limits: @63 = 250 → −6 °C, @79 = 246 → −10 °C, @88 = 226 → −30 °C, @102 = 241 → −15 °C — all reasonable defrost / low-limit thresholds. |
+| @25 +          | per-register | ⚠️ | The V1.3 CSV claims pressures (÷10 bar) and voltages (÷10 V) in this range, but in the captured idle snapshots the only non-zero regs here are @27=12, @29=1, @38=96 — too coarse to confirm or refute the ÷10 claim. Need a capture with the compressor running. |
+| @42 – @45 (status bitmaps) | bitmap (layout TBD) | ⚠️ | CSV claims 16-bit bitmaps with named flags; all four regs are 0 in every raw-byte capture so far. **Need a fault-active capture.** |
 
 **Explicitly rejected**: the previous draft of this doc claimed
-"2100–2116 ÷2 signed". Raw-byte captures decoded fresh disagree — the
+"@7–@23 ÷2 signed". Raw-byte captures decoded fresh disagree — the
 ÷2 scaling was an artifact of looking at decoded JSONL from an older
 sniffer build whose decoder is no longer trustworthy. Outdoor coil at
 raw=9 maps to 9 °C, not 4.5 °C, and that's the value that fits both
@@ -153,21 +157,21 @@ should depend on it.
 1. **Write function code.** ❓ The CSV claims FC=0x10 (Write
    Multiple) is supported. `sniff_cap.jsonl` (decoded form, ⚠️
    reliability) shows three FC=0x06 (Write Single) events writing
-   regs 2000, 2003, 2037. Zero writes are present in raw-byte
+   @50, @53, @87. Zero writes are present in raw-byte
    captures. **Press a panel button (on/off, setpoint up, mode
    change) during the next capture session** and confirm which FC
    the panel actually sends, what window/addr it targets, and the
    payload layout. Default the controller write path to FC=0x06
    single-reg until proven otherwise.
-2. **Status-bitmap layout (2135 – 2138).** ⚠️ See §4 and §6. CSV
+2. **Status-bitmap layout (@42 – @45).** ⚠️ See §4 and §6. CSV
    has 30+ named flag bits across these four regs; raw captures
    show all zeros. **Need a capture with at least one fault active**
    — e.g., DHW probe disconnected, or a real running-state event.
-3. **Pressure / voltage / current scaling (regs 2118+).** ⚠️ CSV
+3. **Pressure / voltage / current scaling (@25+).** ⚠️ CSV
    suggests ÷10 for several of these; idle captures don't have
    enough signal to confirm or refute. **Need a capture with the
-   compressor running** so AC mains (CSV: 2120), DC bus (CSV: 2122),
-   compressor current (CSV: 2131) show their live values.
+   compressor running** so AC mains (CSV: @27), DC bus (CSV: @29),
+   compressor current (CSV: @38) show their live values.
 4. **Tuya MCU variant.** ❓ Captures look like the "basic" variant.
    Confirm against the Tuya MCU SDK docs before hard-coding any
    further frame types into the codec.

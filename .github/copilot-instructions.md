@@ -87,8 +87,9 @@ complete decoded transactions. These are:
   `%lld` for `int64_t`. Always cast to `(long)` and use `%ld`, or `(unsigned long)`
   and use `%lu`.
 - Namespaces: `arctic::`, `sniffer::`, `recorder::`, `api::`, `wifi::`
-- Register addresses use the protocol's native numbering (2000–2138), not zero-based
-  offsets.
+- Register addresses are wire byte offsets `@N` in the unified page (telemetry
+  @0–@49, holding @50–@107), as defined by the arctic-macon library. The legacy
+  Modbus 2000–2142 numbering is retired; never reintroduce it.
 - Modbus CRC16 is computed locally (no dependency on esp-modbus for passive sniffing).
 
 ### REST API
@@ -107,8 +108,8 @@ complete decoded transactions. These are:
 ### Capture File Format (JSONL)
 One JSON object per line, compatible with arctic-simulator playback:
 ```jsonl
-{"t":0,"fc":3,"addr":2100,"count":39,"values":[...]}
-{"t":500,"fc":6,"addr":2000,"value":1}
+{"t":0,"fc":3,"addr":0,"count":50,"values":[...]}
+{"t":500,"fc":6,"addr":50,"value":1}
 ```
 - `t` — milliseconds since recording start
 - `fc` — function code (3=read holding, 6=write single, 16=write multiple)

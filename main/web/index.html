@@ -288,7 +288,7 @@ table.adv-tbl tr.adv-cat td { color: var(--fg); font-weight: 700; font-size: 11p
             <div class="metric"><span class="ml">Cooling Setpoint</span><span class="mv" id="tCoolSet">—</span></div>
             <div class="metric"><span class="ml">Hot Water Setpoint</span><span class="mv" id="tHotWaterSet">—</span></div>
             <div class="metric"><span class="ml">Hot Water Ceiling</span><span class="mv" id="tHotWaterCeil">—</span></div>
-            <div class="metric"><span class="ml">Aux Heat Setpoint</span><span class="mv" id="tAuxSet">—</span></div>
+            <div class="metric"><span class="ml">Heating Setpoint</span><span class="mv" id="tHeatSet">—</span></div>
         </div>
     </div>
 
@@ -484,12 +484,12 @@ function addTransaction(txn) {
 
     const ts = new Date(txn.ts).toLocaleTimeString('en', {hour12:false});
     const addr = txn.addr;
-    const end = txn.count > 1 ? `–${addr + txn.count - 1}` : '';
+    const end = txn.count > 1 ? `–@${addr + txn.count - 1}` : '';
 
     let hdr = `<div class="txn-header">
         <span style="color:var(--muted)">${ts}</span>
         <span class="fc">${txn.fc_name}</span>
-        <span>Reg ${addr}${end}</span>
+        <span>@${addr}${end}</span>
         <span>${txn.count} reg${txn.count>1?'s':''}</span>`;
     if (txn.error) hdr += `<span style="color:var(--red)">ERR:${txn.error}</span>`;
     // Show first value summary for single-register writes
@@ -502,7 +502,7 @@ function addTransaction(txn) {
     if (txn.regs) {
         for (const r of txn.regs) {
             regs += `<div class="reg-row">
-                <span class="reg-addr">${r.addr}</span>
+                <span class="reg-addr">@${r.addr}</span>
                 <span class="reg-name">${r.name}</span>
                 <span class="reg-val">${r.value} <span style="color:var(--muted)">(${r.raw})</span></span>
             </div>`;
@@ -714,7 +714,7 @@ async function pollState() {
         setMetric('tCoolSet', s.cooling_setpoint_c, '°C');
         setMetric('tHotWaterSet', s.setpoint_c, '°C');
         setMetric('tHotWaterCeil', s.hot_water_ceiling_c, '°C');
-        setMetric('tAuxSet', s.aux_heat_setpoint_c, '°C');
+        setMetric('tHeatSet', s.heating_setpoint_c, '°C');
 
         // Water Loop & Environment
         setMetric('tTank', t.tank, '°C');
@@ -903,7 +903,7 @@ async function loadUnknown(){
         d.registers.sort((a,b) => a.addr - b.addr);
         body.innerHTML = d.registers.map(x => {
             const age = x.last_ms > 0 ? Math.round((now - x.last_ms)/1000) : '?';
-            return `<tr><td>${x.addr}</td>`
+            return `<tr><td>@${x.addr}</td>`
                  + `<td>${x.last_value} <span style="color:var(--muted)">0x${x.last_value.toString(16).padStart(2,'0')}</span></td>`
                  + `<td class="num">${x.seen}</td>`
                  + `<td class="num">${x.changes}</td>`
